@@ -1,4 +1,5 @@
-import {onDocumentCreated} from "firebase-functions/v2/firestore";
+/* eslint-disable */
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
 
 admin.initializeApp();
@@ -54,27 +55,43 @@ export const onNotificationCreated = onDocumentCreated(
       }
 
       let title = "Adventure Streak";
-      let body = "You have a new alert!";
+      let body = "¡Tienes una nueva alerta!";
 
       switch (data.type) {
-      case "reaction":
-        title = "New Reaction! 🔥";
-        body = `${data.senderName} reacted with ${data.reactionType} ` +
-                        "to your activity.";
-        break;
-      case "follow":
-        title = "New Follower! 👥";
-        body = `${data.senderName} is now following your adventures.`;
-        break;
-      case "achievement":
-        title = "Achievement Unlocked! 🏆";
-        if (data.badgeId && data.badgeId.startsWith("level_up_")) {
-          const level = data.badgeId.split("_").pop();
-          body = `Congratulations! You've reached Level ${level}!`;
-        } else {
-          body = `You've earned the ${data.badgeId || "Reward"} badge!`;
-        }
-        break;
+        case "reaction":
+          title = "¡Nueva reacción! 🔥";
+          body = `${data.senderName} reaccionó con ${data.reactionType} ` +
+            "a tu actividad.";
+          break;
+        case "follow":
+          title = "¡Nuevo seguidor! 👥";
+          body = `${data.senderName} ahora sigue tus aventuras.`;
+          break;
+        case "achievement":
+          title = "¡Logro desbloqueado! 🏆";
+          if (data.badgeId && data.badgeId.startsWith("level_up_")) {
+            const level = data.badgeId.split("_").pop();
+            body = `¡Felicidades! ¡Has alcanzado el Nivel ${level}!`;
+          } else {
+            body = `¡Has ganado la insignia ${data.badgeId || "Recompensa"}!`;
+          }
+          break;
+        case "territory_conquered":
+          title = "¡Territorio Conquistado! 🚩";
+          body = "¡Has conquistado nuevos territorios! Sigue explorando.";
+          break;
+        case "territory_stolen":
+          title = "¡Territorio Robado! ⚔️";
+          body = `¡${data.senderName} te ha robado un territorio! ¡Recupéralo!`;
+          break;
+        case "territory_defended":
+          title = "¡Territorio Defendido! 🛡️";
+          body = "Tu territorio ha sido defendido con éxito.";
+          break;
+        case "workout_import":
+          title = "Entrenamiento Procesado 🏃";
+          body = "Tu entrenamiento ha sido analizado y los territorios actualizados.";
+          break;
       }
 
       const message: admin.messaging.MulticastMessage = {
@@ -97,3 +114,6 @@ export const onNotificationCreated = onDocumentCreated(
       console.error("Error sending push notification:", error);
     }
   });
+
+export * from "./territories";
+export * from "./reactions";
