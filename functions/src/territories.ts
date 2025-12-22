@@ -21,7 +21,7 @@ interface TerritoryCell {
     centerLongitude: number;
     boundary: { latitude: number; longitude: number; }[];
     expiresAt: Date;
-    activityEndAt: Date;
+    lastConqueredAt: Date; // Renamed from activityEndAt for iOS alignment
     userId: string;
     activityId?: string;
 }
@@ -109,7 +109,7 @@ function createCell(x: number, y: number, now: Date, userId: string, activityId:
         centerLongitude: center.longitude,
         boundary: getBoundary(center.latitude, center.longitude),
         expiresAt: expiresAt,
-        activityEndAt: now,
+        lastConqueredAt: now, // Renamed from activityEndAt for iOS alignment
         userId: userId,
         activityId: activityId,
     };
@@ -140,6 +140,8 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
         console.log(`No userId in activity ${activityId}`);
         return;
     }
+
+    const locationLabel = activityData.locationLabel || null;
 
     const db = admin.firestore();
     const xpConfig = await fetchXPConfig(db);
@@ -260,7 +262,7 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
 
         if (existing) {
             const isOwner = existing.userId === userId;
-            const existingTime = existing.activityEndAt ? existing.activityEndAt.toDate() : new Date(0);
+            const existingTime = (existing.lastConqueredAt || existing.activityEndAt) ? (existing.lastConqueredAt || existing.activityEndAt).toDate() : new Date(0);
             const isExpired = existing.expiresAt ? existing.expiresAt.toDate() < endDate : true;
 
             if (!isOwner && !isExpired && existingTime >= endDate) {
@@ -330,17 +332,49 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
             await currentBatch.commit();
             console.log(`[Batch] Intermediate commit: ${currentOpCount} docs`);
             currentBatch = db.batch();
-            currentOpCount = 0;
         }
     }
 
     // Final Intermediate Batch Commit
+    // Write global territory updates
     if (currentOpCount > 0) {
         await currentBatch.commit();
         console.log(`[Batch] Final intermediate commit: ${currentOpCount} docs`);
     }
 
-    // 4. XP & Missions Calculation
+    // 4. Persist calculated territories to the activity's subcollection
+    // needed for the client-side mini-map (requested by user to be server-side)
+    const territoryCellsArray = Array.from(traversedCells.values());
+    if (territoryCellsArray.length > 0) {
+        const chunkSize = 200;
+        const subColBatch = db.batch();
+        let subColOpCount = 0;
+
+        for (let i = 0; i < territoryCellsArray.length; i += chunkSize) {
+            const slice = territoryCellsArray.slice(i, i + chunkSize);
+            const chunkIndex = Math.floor(i / chunkSize);
+            const chunkRef = db.collection(`activities/${activityId}/territories`).doc(`chunk_${chunkIndex}`);
+
+            subColBatch.set(chunkRef, {
+                order: chunkIndex,
+                cells: slice, // Firestore handles array of objects
+                cellCount: slice.length
+            });
+            subColOpCount++;
+        }
+
+        // Also update territoryChunkCount meta-data on the activity doc
+        const activityRef = db.collection("activities").doc(activityId);
+        subColBatch.update(activityRef, {
+            territoryChunkCount: subColOpCount,
+            territoryPointsCount: territoryCellsArray.length
+        });
+
+        await subColBatch.commit();
+        console.log(`Persisted ${territoryCellsArray.length} cells in ${subColOpCount} chunks to activity ${activityId}`);
+    }
+
+    // 5. XP & Missions Calculation
     const territoryStats: TerritoryStats = {
         newCellsCount: conquestCount,
         defendedCellsCount: defenseCount,
@@ -432,6 +466,7 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
             senderId: "system",
             senderName: "Adventure Streak",
             activityId: activityId,
+            locationLabel: locationLabel,
             timestamp: FieldValue.serverTimestamp(),
             isRead: false
         });
@@ -453,7 +488,7 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
     const missionNames = missions.map(m => m.name).join(" · ");
     const primaryMission = missions.length > 0 ? missions[0] : null;
 
-    let title = primaryMission ? primaryMission.name : "Actividad completada";
+    let title = primaryMission ? primaryMission.name : (locationLabel || "Actividad completada");
     let eventType = "distance_record"; // default
     if (recapturedCount > 0) eventType = "territory_recaptured";
     else if (conquestCount > 0) eventType = "territory_conquered";
@@ -491,7 +526,8 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
             defendedZonesCount: defenseCount,
             recapturedZonesCount: recapturedCount,
             calories: activityData.calories || 0,
-            averageHeartRate: activityData.averageHeartRate || 0
+            averageHeartRate: activityData.averageHeartRate || 0,
+            locationLabel: locationLabel
         },
         rarity: primaryMission ? primaryMission.rarity : null,
         isPersonal: true,

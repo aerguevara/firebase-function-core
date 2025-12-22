@@ -77,16 +77,26 @@ export const onNotificationCreated = onDocumentCreated(
           }
           break;
         case "territory_conquered":
-          title = "¡Territorio Conquistado! 🚩";
-          body = "¡Has conquistado nuevos territorios! Sigue explorando.";
+          title = data.locationLabel ? `¡Conquista en ${data.locationLabel}! 🚩` : "¡Territorio Conquistado! 🚩";
+          body = data.locationLabel
+            ? `Has conquistado nuevos territorios en ${data.locationLabel}. ¡Sigue así!`
+            : "¡Has conquistado nuevos territorios! Sigue explorando.";
           break;
         case "territory_stolen":
           title = "¡Territorio Robado! ⚔️";
-          body = `¡${data.senderName} te ha robado un territorio! ¡Recupéralo!`;
+          body = data.locationLabel
+            ? `¡${data.senderName} te ha robado un territorio en ${data.locationLabel}! ¡Recupéralo!`
+            : `¡${data.senderName} te ha robado un territorio! ¡Recupéralo!`;
           break;
         case "territory_defended":
           title = "¡Territorio Defendido! 🛡️";
           body = "Tu territorio ha sido defendido con éxito.";
+          break;
+        case "territory_stolen_success":
+          title = "¡Territorio Robado! 🏴‍☠️";
+          body = data.locationLabel
+            ? `¡Has robado territorios enemigos en ${data.locationLabel}!`
+            : "¡Has robado territorios enemigos correctamente!";
           break;
         case "workout_import":
           title = "Entrenamiento Procesado 🏃";
