@@ -113,6 +113,18 @@ export const onNotificationCreated = onDocumentCreated(
           notificationId: snapshot.id,
           type: data.type || "unknown",
         },
+        apns: {
+          payload: {
+            aps: {
+              sound: "default",
+            },
+          },
+        },
+        android: {
+          notification: {
+            sound: "default",
+          },
+        },
         tokens,
       };
 

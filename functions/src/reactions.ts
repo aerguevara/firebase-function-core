@@ -48,7 +48,7 @@ export const onReactionCreated = onDocumentCreated(
 
             // 3. Get Reactor Details (User who reacted)
             const reactorSnap = await db.collection("users").doc(reactorId).get();
-            const reactorName = reactorSnap.exists ? reactorSnap.data()?.name : "Unknown User";
+            const reactorName = reactorSnap.exists ? reactorSnap.data()?.displayName : "Unknown User";
             const reactorAvatar = reactorSnap.exists ? reactorSnap.data()?.avatarURL : "";
 
             // 4. Create Notification
