@@ -94,11 +94,12 @@ export const onNotificationCreated = onDocumentCreated(
           break;
         case "territory_stolen_success":
           title = "¡Territorio Robado! 🏴‍☠️";
-          body = data.locationLabel
+          body = data.message || (data.locationLabel
             ? `¡Has robado territorios enemigos en ${data.locationLabel}!`
-            : "¡Has robado territorios enemigos correctamente!";
+            : "¡Has robado territorios enemigos correctamente!");
           break;
         case "workout_import":
+          // Legacy or handled elsewhere if needed, but not triggered from territories.ts anymore
           title = "Entrenamiento Procesado 🏃";
           body = "Tu entrenamiento ha sido analizado y los territorios actualizados.";
           break;

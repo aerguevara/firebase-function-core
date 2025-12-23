@@ -444,17 +444,40 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
         let totalStolen = 0;
         victimSteals.forEach(count => totalStolen += count);
 
+        // Fetch victim names for a better message
+        const victimIds = Array.from(victimSteals.keys());
+        let victimNames: string[] = [];
+        try {
+            const victimDocs = await Promise.all(
+                victimIds.map(id => db.collection("users").doc(id).get())
+            );
+            victimNames = victimDocs
+                .filter(d => d.exists && d.data()?.displayName)
+                .map(d => d.data()?.displayName as string);
+        } catch (e) {
+            console.log("Error fetching victim names:", e);
+        }
+
+        let theftMessage = `¡Has robado ${totalStolen} territorios!`;
+        if (victimNames.length > 0) {
+            const primaryVictim = victimNames[0];
+            if (victimNames.length === 1) {
+                theftMessage = `¡Has robado ${totalStolen} territorios a ${primaryVictim}!`;
+            } else {
+                theftMessage = `¡Has robado territorios a ${primaryVictim} y ${victimNames.length - 1} más!`;
+            }
+        }
+
         await db.collection("notifications").add({
             recipientId: userId,
-            type: "territory_stolen_success", // Distinct type or reuse 'territory_conquered'? User asked for "roba a x".
-            // Let's keep it generic "You stole X territories" for now.
+            type: "territory_stolen_success",
             senderId: "system",
             senderName: "Adventure Streak",
             senderAvatarURL: "",
             activityId: activityId,
             timestamp: FieldValue.serverTimestamp(),
             isRead: false,
-            message: `¡Has robado ${totalStolen} territorios!`
+            message: theftMessage
         });
     }
 
@@ -471,17 +494,6 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
             isRead: false
         });
     }
-
-    // Workout Processed
-    await db.collection("notifications").add({
-        recipientId: userId,
-        type: "workout_import",
-        senderId: "system",
-        senderName: "Adventure Streak",
-        activityId: activityId,
-        timestamp: FieldValue.serverTimestamp(),
-        isRead: false
-    });
 
     // E. Create Feed Event
     // Construct Feed Event matching FeedModels.swift logic
