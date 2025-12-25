@@ -96,4 +96,5 @@ export interface TerritoryStats {
     newCellsCount: number;
     defendedCellsCount: number;
     recapturedCellsCount: number;
+    stolenCellsCount: number;
 }

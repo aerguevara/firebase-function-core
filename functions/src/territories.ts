@@ -250,6 +250,7 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
     let conquestCount = 0;
     let defenseCount = 0;
     let recapturedCount = 0;
+    let stealCount = 0;
 
     // 3b. Prepare Batches for Territory Updates
     let currentBatch = db.batch();
@@ -298,7 +299,7 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
             } else if (!isOwner) {
                 interaction = "steal";
                 victimId = existing.userId;
-                recapturedCount++;
+                stealCount++;
             } else {
                 interaction = "defense";
                 defenseCount++;
@@ -378,7 +379,8 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
     const territoryStats: TerritoryStats = {
         newCellsCount: conquestCount,
         defendedCellsCount: defenseCount,
-        recapturedCellsCount: recapturedCount
+        recapturedCellsCount: recapturedCount,
+        stolenCellsCount: stealCount
     };
 
     const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);
@@ -392,12 +394,15 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
 
     // A. Territory Batch Commit is now handled above in the loop
 
-    // B. Update User Profile (XP, Level, Last Updated)
+    // B. Update User Profile (XP, Level, Last Updated, cumulative counters)
+
     await db.collection("users").doc(userId).update({
         xp: newTotalXP,
         level: newLevel,
         lastActivityDate: endDate,
-        // Optionally update week stats if we tracked them
+        totalConqueredTerritories: FieldValue.increment(conquestCount),
+        totalStolenTerritories: FieldValue.increment(stealCount),
+        totalDefendedTerritories: FieldValue.increment(defenseCount),
         lastUpdated: FieldValue.serverTimestamp()
     });
 
@@ -433,9 +438,10 @@ export const processActivityComplete = onDocumentUpdated("activities/{activityId
             senderName: userName,
             senderAvatarURL: userAvatar,
             activityId: activityId,
+            locationLabel: locationLabel,
             timestamp: FieldValue.serverTimestamp(),
             isRead: false,
-            message: `Stole ${count} territories!`
+            message: `¡Te ha robado ${count} territorios!`
         });
     }
 
