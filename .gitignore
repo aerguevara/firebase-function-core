@@ -67,3 +67,8 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Secrets
+*service-account.json
+*serviceAccount.json
+*.p12
