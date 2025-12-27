@@ -1,7 +1,7 @@
 /* eslint-disable */
 import * as admin from "firebase-admin";
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { XPContext, TerritoryStats, fetchXPConfig } from "./xp_config";
 import { GamificationService } from "./gamification";
 import { MissionEngine } from "./missions";
@@ -115,444 +115,522 @@ function createCell(x: number, y: number, now: Date, userId: string, activityId:
     };
 }
 
-export const processActivityComplete = onDocumentUpdated("activities/{activityId}", async (event) => {
-    const change = event.data;
-    if (!change) return;
+/**
+ * Calculates the bounding box region for a set of territory cells
+ * to be used in the social feed stories minimap.
+ */
+function calculateMiniMapRegion(cells: TerritoryCell[]): {
+    centerLatitude: number,
+    centerLongitude: number,
+    spanLatitudeDelta: number,
+    spanLongitudeDelta: number
+} | null {
+    if (cells.length === 0) return null;
 
-    const beforeData = change.before.data();
-    const afterData = change.after.data();
-    const activityId = event.params.activityId;
+    let minLat = cells[0].centerLatitude;
+    let maxLat = cells[0].centerLatitude;
+    let minLon = cells[0].centerLongitude;
+    let maxLon = cells[0].centerLongitude;
 
-    if (!afterData) return;
-
-    // Trigger only when status changes to 'pending'
-    const beforeStatus = beforeData?.processingStatus;
-    const afterStatus = afterData?.processingStatus;
-
-    if (afterStatus !== "pending" || beforeStatus === "pending") {
-        return;
+    for (const cell of cells) {
+        minLat = Math.min(minLat, cell.centerLatitude);
+        maxLat = Math.max(maxLat, cell.centerLatitude);
+        minLon = Math.min(minLon, cell.centerLongitude);
+        maxLon = Math.max(maxLon, cell.centerLongitude);
     }
 
-    const userId = afterData.userId;
-    const activityData = afterData;
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLon = (minLon + maxLon) / 2;
 
-    if (!userId) {
-        console.log(`No userId in activity ${activityId}`);
-        return;
-    }
+    // Default span if only one cell or very close. 
+    // 0.01 degrees is roughly 1km, which provides a good minimal context.
+    const latDelta = Math.max(0.01, (maxLat - minLat) * 1.8);
+    const lonDelta = Math.max(0.01, (maxLon - minLon) * 1.8);
 
-    const locationLabel = activityData.locationLabel || null;
-
-    const db = admin.firestore();
-    const xpConfig = await fetchXPConfig(db);
-
-    // Ensure endDate is a Date object for calculations
-    const endDate = activityData.endDate instanceof admin.firestore.Timestamp
-        ? activityData.endDate.toDate()
-        : new Date(activityData.endDate || Date.now());
-
-    // 0. Fetch User Profile & Stats (Context)
-    let userName = activityData.userName || "Adventurer";
-    let userAvatar = activityData.userAvatarURL || null;
-    let xpContext: XPContext | null = null;
-    let currentUserLevel = 1;
-
-    try {
-        const userDoc = await db.collection("users").doc(userId).get();
-        if (userDoc.exists) {
-            const userData = userDoc.data() || {};
-            if (userData.displayName) userName = userData.displayName;
-            if (userData.photoURL) userAvatar = userData.photoURL;
-
-            currentUserLevel = userData.level || 1;
-
-            xpContext = {
-                userId,
-                currentWeekDistanceKm: userData.currentWeekDistanceKm || 0, // Mocked/stored
-                bestWeeklyDistanceKm: userData.bestWeeklyDistanceKm || null,
-                currentStreakWeeks: userData.currentStreakWeeks || 0,
-                todayBaseXPEarned: 0, // Simplified for MVP
-                gamificationState: {
-                    totalXP: userData.xp || 0,
-                    level: currentUserLevel,
-                    currentStreakWeeks: userData.currentStreakWeeks || 0
-                }
-            };
-        }
-    } catch (e) {
-        console.log("Error fetching user profile:", e);
-    }
-
-    if (!xpContext) {
-        console.log("Could not build XP Context. Aborting.");
-        return;
-    }
-
-
-    // 1a. Fetch Config
-    let expirationDays = 7;
-    try {
-        const configDoc = await db.collection("config").doc("gameplay").get();
-        if (configDoc.exists) {
-            const config = configDoc.data();
-            if (config && config.territoryExpirationDays) {
-                expirationDays = config.territoryExpirationDays;
-            }
-        }
-    } catch (e) {
-        console.error("Error fetching gameplay config:", e);
-    }
-
-    // 1. Reassemble Route
-    const routesSnapshot = await db.collection(`activities/${activityId}/routes`).get();
-    let allPoints: RoutePoint[] = [];
-
-    const chunks = routesSnapshot.docs.map((d: any) => d.data())
-        .sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
-
-    for (const chunk of chunks) {
-        if (chunk.points && Array.isArray(chunk.points)) {
-            allPoints = allPoints.concat(chunk.points.map((p: any) => ({
-                latitude: p.latitude,
-                longitude: p.longitude,
-                timestamp: p.timestamp && p.timestamp.toDate ? p.timestamp.toDate() : new Date(),
-            })));
-        }
-    }
-
-    // 2. Calculate Territories
-    const traversedCells = new Map<string, TerritoryCell>();
-    if (allPoints.length > 0) {
-        const startIdx = getCellIndex(allPoints[0].latitude, allPoints[0].longitude);
-        const startId = getCellId(startIdx.x, startIdx.y);
-        traversedCells.set(startId, createCell(startIdx.x, startIdx.y, endDate, userId, activityId, expirationDays));
-
-        for (let i = 0; i < allPoints.length - 1; i++) {
-            const segCells = getCellsBetween(allPoints[i], allPoints[i + 1], endDate, userId, activityId, expirationDays);
-            segCells.forEach((cell, id) => traversedCells.set(id, cell));
-        }
-    }
-
-    // 3. Check Existing Owners & Determine Status
-    const cellIds = Array.from(traversedCells.keys());
-    const existingRemotes = new Map<string, any>();
-    const chunkedIds = [];
-    for (let i = 0; i < cellIds.length; i += 30) {
-        chunkedIds.push(cellIds.slice(i, i + 30));
-    }
-
-    for (const chunk of chunkedIds) {
-        const q = await db.collection("remote_territories").where(admin.firestore.FieldPath.documentId(), "in", chunk).get();
-        q.docs.forEach((d: any) => existingRemotes.set(d.id, d.data()));
-    }
-
-    const victimSteals = new Map<string, number>();
-    let conquestCount = 0;
-    let defenseCount = 0;
-    let recapturedCount = 0;
-    let stealCount = 0;
-
-    // 3b. Prepare Batches for Territory Updates
-    let currentBatch = db.batch();
-    let currentOpCount = 0;
-
-    for (const [cellId, newCell] of traversedCells.entries()) {
-        const existing = existingRemotes.get(cellId);
-        let interaction: "conquest" | "defense" | "steal" | "recapture" = "conquest";
-        let victimId: string | null = null;
-
-        if (existing) {
-            const isOwner = existing.userId === userId;
-            const existingTime = (existing.lastConqueredAt || existing.activityEndAt) ? (existing.lastConqueredAt || existing.activityEndAt).toDate() : new Date(0);
-            const isExpired = existing.expiresAt ? existing.expiresAt.toDate() < endDate : true;
-
-            if (!isOwner && !isExpired && existingTime >= endDate) {
-                continue;
-            }
-
-            // CRITICAL FIX: If the client (or previous run) already wrote this cell for THIS activity,
-            // treat it as non-existent to correctly classify it as a NEW conquest, not a defense.
-            if (existing.activityId === activityId) {
-                conquestCount++;
-                const ref = db.collection("remote_territories").doc(cellId);
-                const cellWithStatus = { ...newCell, lastInteraction: "conquest" };
-                currentBatch.set(ref, cellWithStatus);
-                currentOpCount++;
-
-                // History (Self-Collision case -> Conquest)
-                const historyRef = ref.collection("history").doc();
-                currentBatch.set(historyRef, {
-                    userId: userId,
-                    activityId: activityId,
-                    interaction: "conquest",
-                    timestamp: FieldValue.serverTimestamp(),
-                    previousOwnerId: null
-                });
-                currentOpCount++;
-                continue; // Skip the rest of the existing logic
-            }
-
-            if (isExpired) {
-                interaction = isOwner ? "recapture" : "conquest";
-                if (!isOwner) conquestCount++;
-                if (isOwner) recapturedCount++;
-            } else if (!isOwner) {
-                interaction = "steal";
-                victimId = existing.userId;
-                stealCount++;
-            } else {
-                interaction = "defense";
-                defenseCount++;
-            }
-        } else {
-            conquestCount++;
-        }
-
-        const ref = db.collection("remote_territories").doc(cellId);
-        const cellWithStatus = { ...newCell, lastInteraction: interaction };
-        currentBatch.set(ref, cellWithStatus);
-        currentOpCount++;
-
-        // History
-        const historyRef = ref.collection("history").doc();
-        currentBatch.set(historyRef, {
-            userId: userId,
-            activityId: activityId,
-            interaction: interaction,
-            timestamp: FieldValue.serverTimestamp(),
-            previousOwnerId: victimId || null
-        });
-        currentOpCount++;
-
-        if (interaction === "steal" && victimId) {
-            victimSteals.set(victimId, (victimSteals.get(victimId) || 0) + 1);
-        }
-
-        // Commit in chunks of 450 (safe limit for doubled writes per loop)
-        if (currentOpCount >= 450) {
-            await currentBatch.commit();
-            console.log(`[Batch] Intermediate commit: ${currentOpCount} docs`);
-            currentBatch = db.batch();
-        }
-    }
-
-    // Final Intermediate Batch Commit
-    // Write global territory updates
-    if (currentOpCount > 0) {
-        await currentBatch.commit();
-        console.log(`[Batch] Final intermediate commit: ${currentOpCount} docs`);
-    }
-
-    // 4. Persist calculated territories to the activity's subcollection
-    // needed for the client-side mini-map (requested by user to be server-side)
-    const territoryCellsArray = Array.from(traversedCells.values());
-    if (territoryCellsArray.length > 0) {
-        const chunkSize = 200;
-        const subColBatch = db.batch();
-        let subColOpCount = 0;
-
-        for (let i = 0; i < territoryCellsArray.length; i += chunkSize) {
-            const slice = territoryCellsArray.slice(i, i + chunkSize);
-            const chunkIndex = Math.floor(i / chunkSize);
-            const chunkRef = db.collection(`activities/${activityId}/territories`).doc(`chunk_${chunkIndex}`);
-
-            subColBatch.set(chunkRef, {
-                order: chunkIndex,
-                cells: slice, // Firestore handles array of objects
-                cellCount: slice.length
-            });
-            subColOpCount++;
-        }
-
-        // Also update territoryChunkCount meta-data on the activity doc
-        const activityRef = db.collection("activities").doc(activityId);
-        subColBatch.update(activityRef, {
-            territoryChunkCount: subColOpCount,
-            territoryPointsCount: territoryCellsArray.length
-        });
-
-        await subColBatch.commit();
-        console.log(`Persisted ${territoryCellsArray.length} cells in ${subColOpCount} chunks to activity ${activityId}`);
-    }
-
-    // 5. XP & Missions Calculation
-    const territoryStats: TerritoryStats = {
-        newCellsCount: conquestCount,
-        defendedCellsCount: defenseCount,
-        recapturedCellsCount: recapturedCount,
-        stolenCellsCount: stealCount
+    return {
+        centerLatitude: centerLat,
+        centerLongitude: centerLon,
+        spanLatitudeDelta: latDelta,
+        spanLongitudeDelta: lonDelta
     };
+}
 
-    const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);
-    const missions = MissionEngine.classifyMissions(activityData, territoryStats, xpContext, xpConfig);
+// Factory to create the trigger for a specific database
+export const createProcessActivityComplete = (databaseId: string | undefined = undefined) =>
+    onDocumentUpdated({
+        document: "activities/{activityId}",
+        database: databaseId
+    }, async (event) => {
+        const change = event.data;
+        if (!change) return;
 
-    // Calculate new total XP and Level
-    const newTotalXP = xpContext.gamificationState.totalXP + xpBreakdown.total;
-    const newLevel = GamificationService.getLevel(newTotalXP);
+        const beforeData = change.before.data();
+        const afterData = change.after.data();
+        const activityId = event.params.activityId;
 
-    // 5. Update Operations
+        if (!afterData) return;
 
-    // A. Territory Batch Commit is now handled above in the loop
+        // Trigger only when status changes to 'pending'
+        const beforeStatus = beforeData?.processingStatus;
+        const afterStatus = afterData?.processingStatus;
 
-    // B. Update User Profile (XP, Level, Last Updated, cumulative counters)
+        if (afterStatus !== "pending" || beforeStatus === "pending") {
+            return;
+        }
 
-    await db.collection("users").doc(userId).update({
-        xp: newTotalXP,
-        level: newLevel,
-        lastActivityDate: endDate,
-        totalConqueredTerritories: FieldValue.increment(conquestCount),
-        totalStolenTerritories: FieldValue.increment(stealCount),
-        totalDefendedTerritories: FieldValue.increment(defenseCount),
-        lastUpdated: FieldValue.serverTimestamp()
-    });
+        const userId = afterData.userId;
+        const activityData = afterData;
 
-    // C. Update Activity (with results)
-    await db.collection("activities").doc(activityId).update({
-        xpBreakdown: xpBreakdown,
-        missions: missions,
-        processingStatus: "completed", // customizable
-        territoryStats: territoryStats
-    });
+        if (!userId) {
+            console.log(`No userId in activity ${activityId}`);
+            return;
+        }
 
-    // D. Notifications
-    // Level Up
-    if (newLevel > currentUserLevel) {
-        await db.collection("notifications").add({
-            recipientId: userId,
-            type: "achievement",
-            badgeId: `level_up_${newLevel}`,
-            senderId: "system",
-            senderName: "Adventure Streak",
-            timestamp: FieldValue.serverTimestamp(),
-            isRead: false
-        });
-    }
+        const locationLabel = activityData.locationLabel || null;
 
-    // Territory Notifications (Victims)
-    for (const [victimId, count] of victimSteals) {
-        if (victimId === userId) continue;
-        await db.collection("notifications").add({
-            recipientId: victimId,
-            type: "territory_stolen",
-            senderId: userId,
-            senderName: userName,
-            senderAvatarURL: userAvatar,
-            activityId: activityId,
-            locationLabel: locationLabel,
-            timestamp: FieldValue.serverTimestamp(),
-            isRead: false,
-            message: `¡Te ha robado ${count} territorios!`
-        });
-    }
+        const db = databaseId ? getFirestore(databaseId) : getFirestore();
+        const xpConfig = await fetchXPConfig(db);
 
-    // Territory Notifications (Attacker/Thief)
-    if (victimSteals.size > 0) {
-        let totalStolen = 0;
-        victimSteals.forEach(count => totalStolen += count);
+        // Ensure endDate is a Date object for calculations
+        const endDate = activityData.endDate instanceof admin.firestore.Timestamp
+            ? activityData.endDate.toDate()
+            : new Date(activityData.endDate || Date.now());
 
-        // Fetch victim names for a better message
-        const victimIds = Array.from(victimSteals.keys());
-        let victimNames: string[] = [];
+        // 0. Fetch User Profile & Stats (Context)
+        let userName = activityData.userName || "Adventurer";
+        let userAvatar = activityData.userAvatarURL || null;
+        let xpContext: XPContext | null = null;
+        let currentUserLevel = 1;
+
         try {
-            const victimDocs = await Promise.all(
-                victimIds.map(id => db.collection("users").doc(id).get())
-            );
-            victimNames = victimDocs
-                .filter(d => d.exists && d.data()?.displayName)
-                .map(d => d.data()?.displayName as string);
+            const userDoc = await db.collection("users").doc(userId).get();
+            if (userDoc.exists) {
+                const userData = userDoc.data() || {};
+                if (userData.displayName) userName = userData.displayName;
+                if (userData.photoURL) userAvatar = userData.photoURL;
+
+                currentUserLevel = userData.level || 1;
+
+                xpContext = {
+                    userId,
+                    currentWeekDistanceKm: userData.currentWeekDistanceKm || 0, // Mocked/stored
+                    bestWeeklyDistanceKm: userData.bestWeeklyDistanceKm || null,
+                    currentStreakWeeks: userData.currentStreakWeeks || 0,
+                    todayBaseXPEarned: 0, // Simplified for MVP
+                    gamificationState: {
+                        totalXP: userData.xp || 0,
+                        level: currentUserLevel,
+                        currentStreakWeeks: userData.currentStreakWeeks || 0
+                    }
+                };
+            }
         } catch (e) {
-            console.log("Error fetching victim names:", e);
+            console.log("Error fetching user profile:", e);
         }
 
-        let theftMessage = `¡Has robado ${totalStolen} territorios!`;
-        if (victimNames.length > 0) {
-            const primaryVictim = victimNames[0];
-            if (victimNames.length === 1) {
-                theftMessage = `¡Has robado ${totalStolen} territorios a ${primaryVictim}!`;
-            } else {
-                theftMessage = `¡Has robado territorios a ${primaryVictim} y ${victimNames.length - 1} más!`;
+        if (!xpContext) {
+            console.log("Could not build XP Context. Aborting.");
+            return;
+        }
+
+
+        // 1a. Fetch Config
+        let expirationDays = 7;
+        try {
+            const configDoc = await db.collection("config").doc("gameplay").get();
+            if (configDoc.exists) {
+                const config = configDoc.data();
+                if (config && config.territoryExpirationDays) {
+                    expirationDays = config.territoryExpirationDays;
+                }
+            }
+        } catch (e) {
+            console.error("Error fetching gameplay config:", e);
+        }
+
+        // 1. Reassemble Route
+        const routesSnapshot = await db.collection(`activities/${activityId}/routes`).get();
+        let allPoints: RoutePoint[] = [];
+
+        const chunks = routesSnapshot.docs.map((d: any) => d.data())
+            .sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+
+        for (const chunk of chunks) {
+            if (chunk.points && Array.isArray(chunk.points)) {
+                allPoints = allPoints.concat(chunk.points.map((p: any) => ({
+                    latitude: p.latitude,
+                    longitude: p.longitude,
+                    timestamp: p.timestamp && p.timestamp.toDate ? p.timestamp.toDate() : new Date(),
+                })));
             }
         }
 
-        await db.collection("notifications").add({
-            recipientId: userId,
-            type: "territory_stolen_success",
-            senderId: "system",
-            senderName: "Adventure Streak",
-            senderAvatarURL: "",
-            activityId: activityId,
-            timestamp: FieldValue.serverTimestamp(),
-            isRead: false,
-            message: theftMessage
+        // 2. Calculate Territories
+        const traversedCells = new Map<string, TerritoryCell>();
+        if (allPoints.length > 0) {
+            const startIdx = getCellIndex(allPoints[0].latitude, allPoints[0].longitude);
+            const startId = getCellId(startIdx.x, startIdx.y);
+            traversedCells.set(startId, createCell(startIdx.x, startIdx.y, endDate, userId, activityId, expirationDays));
+
+            for (let i = 0; i < allPoints.length - 1; i++) {
+                const segCells = getCellsBetween(allPoints[i], allPoints[i + 1], endDate, userId, activityId, expirationDays);
+                segCells.forEach((cell, id) => traversedCells.set(id, cell));
+            }
+        }
+
+        // 3. Check Existing Owners & Determine Status
+        const cellIds = Array.from(traversedCells.keys());
+        const existingRemotes = new Map<string, any>();
+        const chunkedIds = [];
+        for (let i = 0; i < cellIds.length; i += 30) {
+            chunkedIds.push(cellIds.slice(i, i + 30));
+        }
+
+        for (const chunk of chunkedIds) {
+            const q = await db.collection("remote_territories").where(admin.firestore.FieldPath.documentId(), "in", chunk).get();
+            q.docs.forEach((d: any) => existingRemotes.set(d.id, d.data()));
+        }
+
+        const victimSteals = new Map<string, number>();
+        let conquestCount = 0;
+        let defenseCount = 0;
+        let recapturedCount = 0;
+        let stealCount = 0;
+
+        // 3b. Prepare Batches for Territory Updates
+        let currentBatch = db.batch();
+        let currentOpCount = 0;
+
+        for (const [cellId, newCell] of traversedCells.entries()) {
+            const existing = existingRemotes.get(cellId);
+            let interaction: "conquest" | "defense" | "steal" | "recapture" = "conquest";
+            let victimId: string | null = null;
+
+            if (existing) {
+                const isOwner = existing.userId === userId;
+                const existingTime = (existing.lastConqueredAt || existing.activityEndAt) ? (existing.lastConqueredAt || existing.activityEndAt).toDate() : new Date(0);
+                const isExpired = existing.expiresAt ? existing.expiresAt.toDate() < endDate : true;
+
+                if (!isOwner && !isExpired && existingTime >= endDate) {
+                    continue;
+                }
+
+                // CRITICAL FIX: If the client (or previous run) already wrote this cell for THIS activity,
+                // treat it as non-existent to correctly classify it as a NEW conquest, not a defense.
+                if (existing.activityId === activityId) {
+                    conquestCount++;
+                    const ref = db.collection("remote_territories").doc(cellId);
+                    const cellWithStatus = { ...newCell, lastInteraction: "conquest" };
+                    currentBatch.set(ref, cellWithStatus);
+                    currentOpCount++;
+
+                    // History (Self-Collision case -> Conquest)
+                    const historyRef = ref.collection("history").doc();
+                    currentBatch.set(historyRef, {
+                        userId: userId,
+                        activityId: activityId,
+                        interaction: "conquest",
+                        timestamp: FieldValue.serverTimestamp(),
+                        previousOwnerId: null
+                    });
+                    currentOpCount++;
+                    continue; // Skip the rest of the existing logic
+                }
+
+                if (isExpired) {
+                    interaction = isOwner ? "recapture" : "conquest";
+                    if (!isOwner) conquestCount++;
+                    if (isOwner) recapturedCount++;
+                } else if (!isOwner) {
+                    interaction = "steal";
+                    victimId = existing.userId;
+                    stealCount++;
+                } else {
+                    interaction = "defense";
+                    defenseCount++;
+                }
+            } else {
+                conquestCount++;
+            }
+
+            const ref = db.collection("remote_territories").doc(cellId);
+            const cellWithStatus = { ...newCell, lastInteraction: interaction };
+            currentBatch.set(ref, cellWithStatus);
+            currentOpCount++;
+
+            // History
+            const historyRef = ref.collection("history").doc();
+            currentBatch.set(historyRef, {
+                userId: userId,
+                activityId: activityId,
+                interaction: interaction,
+                timestamp: FieldValue.serverTimestamp(),
+                previousOwnerId: victimId || null
+            });
+            currentOpCount++;
+
+            if (interaction === "steal" && victimId) {
+                victimSteals.set(victimId, (victimSteals.get(victimId) || 0) + 1);
+            }
+
+            // Commit in chunks of 450 (safe limit for doubled writes per loop)
+            if (currentOpCount >= 450) {
+                await currentBatch.commit();
+                console.log(`[Batch] Intermediate commit: ${currentOpCount} docs`);
+                currentBatch = db.batch();
+            }
+        }
+
+        // Final Intermediate Batch Commit
+        // Write global territory updates
+        if (currentOpCount > 0) {
+            await currentBatch.commit();
+            console.log(`[Batch] Final intermediate commit: ${currentOpCount} docs`);
+        }
+
+        // 4. Persist calculated territories to the activity's subcollection
+        // needed for the client-side mini-map (requested by user to be server-side)
+        const territoryCellsArray = Array.from(traversedCells.values());
+        if (territoryCellsArray.length > 0) {
+            const chunkSize = 200;
+            const subColBatch = db.batch();
+            let subColOpCount = 0;
+
+            for (let i = 0; i < territoryCellsArray.length; i += chunkSize) {
+                const slice = territoryCellsArray.slice(i, i + chunkSize);
+                const chunkIndex = Math.floor(i / chunkSize);
+                const chunkRef = db.collection(`activities/${activityId}/territories`).doc(`chunk_${chunkIndex}`);
+
+                subColBatch.set(chunkRef, {
+                    order: chunkIndex,
+                    cells: slice, // Firestore handles array of objects
+                    cellCount: slice.length
+                });
+                subColOpCount++;
+            }
+
+            // Also update territoryChunkCount meta-data on the activity doc
+            const activityRef = db.collection("activities").doc(activityId);
+            subColBatch.update(activityRef, {
+                territoryChunkCount: subColOpCount,
+                territoryPointsCount: territoryCellsArray.length
+            });
+
+            await subColBatch.commit();
+            console.log(`Persisted ${territoryCellsArray.length} cells in ${subColOpCount} chunks to activity ${activityId}`);
+        }
+
+        // 5. XP & Missions Calculation
+        const territoryStats: TerritoryStats = {
+            newCellsCount: conquestCount,
+            defendedCellsCount: defenseCount,
+            recapturedCellsCount: recapturedCount,
+            stolenCellsCount: stealCount
+        };
+
+        const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);
+        const missions = MissionEngine.classifyMissions(activityData, territoryStats, xpContext, xpConfig);
+
+        // Calculate new total XP and Level
+        const newTotalXP = xpContext.gamificationState.totalXP + xpBreakdown.total;
+        const newLevel = GamificationService.getLevel(newTotalXP);
+
+        // 5. Update Operations
+
+        // A. Territory Batch Commit is now handled above in the loop
+
+        // B. Update User Profile (XP, Level, Last Updated, cumulative counters)
+
+        await db.collection("users").doc(userId).update({
+            xp: newTotalXP,
+            level: newLevel,
+            lastActivityDate: endDate,
+            totalConqueredTerritories: FieldValue.increment(conquestCount),
+            totalStolenTerritories: FieldValue.increment(stealCount),
+            totalDefendedTerritories: FieldValue.increment(defenseCount),
+            totalRecapturedTerritories: FieldValue.increment(recapturedCount),
+            lastUpdated: FieldValue.serverTimestamp()
         });
-    }
 
-    // Territory Notifications (Self)
-    if (conquestCount > 0) {
-        await db.collection("notifications").add({
-            recipientId: userId,
-            type: "territory_conquered",
-            senderId: "system",
-            senderName: "Adventure Streak",
-            activityId: activityId,
-            locationLabel: locationLabel,
-            timestamp: FieldValue.serverTimestamp(),
-            isRead: false
+        // C. Update Activity (with results)
+        await db.collection("activities").doc(activityId).update({
+            xpBreakdown: xpBreakdown,
+            missions: missions,
+            processingStatus: "completed", // customizable
+            territoryStats: territoryStats
         });
-    }
 
-    // E. Create Feed Event
-    // Construct Feed Event matching FeedModels.swift logic
-    const missionNames = missions.map(m => m.name).join(" · ");
-    const primaryMission = missions.length > 0 ? missions[0] : null;
+        // D. Notifications
+        // Level Up
+        if (newLevel > currentUserLevel) {
+            await db.collection("notifications").add({
+                recipientId: userId,
+                type: "achievement",
+                badgeId: `level_up_${newLevel}`,
+                senderId: "system",
+                senderName: "Adventure Streak",
+                timestamp: FieldValue.serverTimestamp(),
+                isRead: false
+            });
+        }
 
-    let title = primaryMission ? primaryMission.name : (locationLabel || "Actividad completada");
-    let eventType = "distance_record"; // default
-    if (recapturedCount > 0) eventType = "territory_recaptured";
-    else if (conquestCount > 0) eventType = "territory_conquered";
-    else if (defenseCount > 0) eventType = "territory_conquered"; // Mapping defense to conquered type for icon? Check swift.
-    // Swift check: defense -> territoryConquered type. Yes.
+        // Territory Notifications (Victims)
+        for (const [victimId, count] of victimSteals) {
+            if (victimId === userId) continue;
+            await db.collection("notifications").add({
+                recipientId: victimId,
+                type: "territory_stolen",
+                senderId: userId,
+                senderName: userName,
+                senderAvatarURL: userAvatar,
+                activityId: activityId,
+                locationLabel: locationLabel,
+                timestamp: FieldValue.serverTimestamp(),
+                isRead: false,
+                message: `¡Te ha robado ${count} territorios!`
+            });
+        }
 
-    const territoryHighlights = [];
-    if (conquestCount > 0) territoryHighlights.push(`${conquestCount} territorios conquistados`);
-    if (defenseCount > 0) territoryHighlights.push(`${defenseCount} territorios defendidos`);
-    if (recapturedCount > 0) territoryHighlights.push(`${recapturedCount} territorios robados`);
+        // Territory Notifications (Attacker/Thief)
+        if (victimSteals.size > 0) {
+            let totalStolen = 0;
+            victimSteals.forEach(count => totalStolen += count);
 
-    const subtitles = [];
-    if (missionNames) subtitles.push(`Misiones: ${missionNames}`);
-    if (territoryHighlights.length > 0) subtitles.push(territoryHighlights.join(" · "));
-    const subtitle = subtitles.join(" · ");
+            // Fetch victim names for a better message
+            const victimIds = Array.from(victimSteals.keys());
+            let victimNames: string[] = [];
+            try {
+                const victimDocs = await Promise.all(
+                    victimIds.map(id => db.collection("users").doc(id).get())
+                );
+                victimNames = victimDocs
+                    .filter(d => d.exists && d.data()?.displayName)
+                    .map(d => d.data()?.displayName as string);
+            } catch (e) {
+                console.log("Error fetching victim names:", e);
+            }
 
-    const feedEvent = {
-        id: `activity-${activityId}-summary`,
-        type: eventType,
-        date: endDate,
-        activityId: activityId,
-        title: title,
-        subtitle: subtitle,
-        xpEarned: xpBreakdown.total,
-        userId: userId,
-        relatedUserName: userName,
-        userLevel: newLevel,
-        userAvatarURL: userAvatar,
-        activityData: {
-            activityType: activityData.activityType,
-            distanceMeters: activityData.distanceMeters,
-            durationSeconds: activityData.durationSeconds,
+            let theftMessage = `¡Has robado ${totalStolen} territorios!`;
+            if (victimNames.length > 0) {
+                const primaryVictim = victimNames[0];
+                if (victimNames.length === 1) {
+                    theftMessage = `¡Has robado ${totalStolen} territorios a ${primaryVictim}!`;
+                } else {
+                    theftMessage = `¡Has robado territorios a ${primaryVictim} y ${victimNames.length - 1} más!`;
+                }
+            }
+
+            await db.collection("notifications").add({
+                recipientId: userId,
+                type: "territory_stolen_success",
+                senderId: "system",
+                senderName: "Adventure Streak",
+                senderAvatarURL: "",
+                activityId: activityId,
+                timestamp: FieldValue.serverTimestamp(),
+                isRead: false,
+                message: theftMessage
+            });
+        }
+
+        // Territory Notifications (Self)
+        if (conquestCount > 0) {
+            await db.collection("notifications").add({
+                recipientId: userId,
+                type: "territory_conquered",
+                senderId: "system",
+                senderName: "Adventure Streak",
+                activityId: activityId,
+                locationLabel: locationLabel,
+                timestamp: FieldValue.serverTimestamp(),
+                isRead: false
+            });
+        }
+
+        // Follower Notifications
+        if (conquestCount > 0 || stealCount > 0) {
+            try {
+                const followersSnapshot = await db.collection("users").doc(userId).collection("followers").get();
+                if (!followersSnapshot.empty) {
+                    const followerNotifications = followersSnapshot.docs.map(doc => {
+                        const followerId = doc.id;
+                        return db.collection("notifications").add({
+                            recipientId: followerId,
+                            type: "follower_territory_activity",
+                            senderId: userId,
+                            senderName: userName,
+                            senderAvatarURL: userAvatar,
+                            activityId: activityId,
+                            locationLabel: locationLabel,
+                            conquestCount: conquestCount,
+                            stealCount: stealCount,
+                            timestamp: FieldValue.serverTimestamp(),
+                            isRead: false
+                        });
+                    });
+                    await Promise.all(followerNotifications);
+                    console.log(`Sent activity notifications to ${followersSnapshot.size} followers.`);
+                }
+            } catch (e) {
+                console.error("Error sending follower notifications:", e);
+            }
+        }
+
+        // E. Create Feed Event
+        // Construct Feed Event matching FeedModels.swift logic
+        const missionNames = missions.map(m => m.name).join(" · ");
+        const primaryMission = missions.length > 0 ? missions[0] : null;
+
+        let title = primaryMission ? primaryMission.name : (locationLabel || "Actividad completada");
+        let eventType = "distance_record"; // default
+        if (recapturedCount > 0) eventType = "territory_recaptured";
+        else if (conquestCount > 0) eventType = "territory_conquered";
+        else if (defenseCount > 0) eventType = "territory_conquered"; // Mapping defense to conquered type for icon? Check swift.
+        // Swift check: defense -> territoryConquered type. Yes.
+
+        const territoryHighlights = [];
+        if (conquestCount > 0) territoryHighlights.push(`${conquestCount} territorios conquistados`);
+        if (defenseCount > 0) territoryHighlights.push(`${defenseCount} territorios defendidos`);
+        if (recapturedCount > 0) territoryHighlights.push(`${recapturedCount} territorios recuperados`);
+        if (stealCount > 0) territoryHighlights.push(`${stealCount} territorios robados`);
+
+        const subtitles = [];
+        if (missionNames) subtitles.push(`Misiones: ${missionNames}`);
+        if (territoryHighlights.length > 0) subtitles.push(territoryHighlights.join(" · "));
+        const subtitle = subtitles.join(" · ");
+
+        const feedEvent = {
+            id: `activity-${activityId}-summary`,
+            type: eventType,
+            date: endDate,
+            activityId: activityId,
+            title: title,
+            subtitle: subtitle,
             xpEarned: xpBreakdown.total,
-            newZonesCount: conquestCount,
-            defendedZonesCount: defenseCount,
-            recapturedZonesCount: recapturedCount,
-            calories: activityData.calories || 0,
-            averageHeartRate: activityData.averageHeartRate || 0,
-            locationLabel: locationLabel
-        },
-        rarity: primaryMission ? primaryMission.rarity : null,
-        isPersonal: true,
-        timestamp: FieldValue.serverTimestamp() // For ordering
-    };
+            userId: userId,
+            relatedUserName: userName,
+            userLevel: newLevel,
+            userAvatarURL: userAvatar,
+            activityData: {
+                activityType: activityData.activityType,
+                distanceMeters: activityData.distanceMeters,
+                durationSeconds: activityData.durationSeconds,
+                xpEarned: xpBreakdown.total,
+                newZonesCount: conquestCount,
+                defendedZonesCount: defenseCount,
+                recapturedZonesCount: recapturedCount,
+                stolenZonesCount: stealCount,
+                calories: activityData.calories || 0,
+                averageHeartRate: activityData.averageHeartRate || 0,
+                locationLabel: locationLabel
+            },
+            rarity: primaryMission ? primaryMission.rarity : null,
+            miniMapRegion: calculateMiniMapRegion(territoryCellsArray),
+            isPersonal: true,
+            timestamp: FieldValue.serverTimestamp() // For ordering
+        };
 
-    await db.collection("feed").add(feedEvent);
-    console.log("Feed event created.");
-});
+        await db.collection("feed").add(feedEvent);
+        console.log("Feed event created.");
+    });
 
