@@ -1,6 +1,10 @@
 /* eslint-disable */
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
+import { createProcessActivityComplete } from "./territories";
+import { createOnReactionCreated } from "./reactions";
+import { createOnMockWorkoutCreated } from "./debug_simulation";
 
 admin.initializeApp();
 
@@ -8,9 +12,11 @@ admin.initializeApp();
  * Triggers when a new document is created in the 'notifications' collection.
  * Sends a push notification to the recipient of the notification.
  */
-export const onNotificationCreated = onDocumentCreated(
-  "notifications/{notificationId}",
-  async (event) => {
+export const createOnNotificationCreated = (databaseId: string | undefined = undefined) =>
+  onDocumentCreated({
+    document: "notifications/{notificationId}",
+    database: databaseId
+  }, async (event) => {
     const snapshot = event.data;
     if (!snapshot) {
       console.log("No snapshot found.");
@@ -30,7 +36,7 @@ export const onNotificationCreated = onDocumentCreated(
     }
 
     try {
-      const db = admin.firestore();
+      const db = databaseId ? getFirestore(databaseId) : getFirestore();
       const userRef = db.collection("users").doc(recipientId);
       const userDoc = await userRef.get();
 
@@ -98,6 +104,17 @@ export const onNotificationCreated = onDocumentCreated(
             ? `¡Has robado territorios enemigos en ${data.locationLabel}!`
             : "¡Has robado territorios enemigos correctamente!");
           break;
+        case "follower_territory_activity":
+          title = `¡Actividad de ${data.senderName}! 🚩`;
+          {
+            const counts = [];
+            if (data.conquestCount > 0) counts.push(`${data.conquestCount} conquistados`);
+            if (data.stealCount > 0) counts.push(`${data.stealCount} robados`);
+            const countText = counts.join(" y ");
+            const locationText = data.locationLabel ? ` en ${data.locationLabel}` : "";
+            body = `${data.senderName} ha obtenido ${countText}${locationText}.`;
+          }
+          break;
         case "workout_import":
           // Legacy or handled elsewhere if needed, but not triggered from territories.ts anymore
           title = "Entrenamiento Procesado 🏃";
@@ -138,5 +155,13 @@ export const onNotificationCreated = onDocumentCreated(
     }
   });
 
-export * from "./territories";
-export * from "./reactions";
+// --- PROD ENV (Default Database) ---
+export const onNotificationCreated = createOnNotificationCreated();
+export const processActivityComplete = createProcessActivityComplete();
+export const onReactionCreated = createOnReactionCreated();
+
+// --- PRE ENV (adventure-streak-pre Database) ---
+export const onNotificationCreatedPRE = createOnNotificationCreated("adventure-streak-pre");
+export const processActivityCompletePRE = createProcessActivityComplete("adventure-streak-pre");
+export const onReactionCreatedPRE = createOnReactionCreated("adventure-streak-pre");
+export const onMockWorkoutCreatedPRE = createOnMockWorkoutCreated("adventure-streak-pre");

@@ -26,6 +26,14 @@ interface TerritoryCell {
     activityId?: string;
 }
 
+interface Rival {
+    userId: string;
+    displayName: string;
+    avatarURL: string | null;
+    lastInteractionAt: Date;
+    count: number;
+}
+
 // Helper: Calculate Cell ID from coordinates
 function getCellIndex(latitude: number, longitude: number): { x: number, y: number } {
     const x = Math.floor(longitude / CELL_SIZE_DEGREES);
@@ -207,7 +215,8 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             if (userDoc.exists) {
                 const userData = userDoc.data() || {};
                 if (userData.displayName) userName = userData.displayName;
-                if (userData.photoURL) userAvatar = userData.photoURL;
+                if (userData.avatarURL) userAvatar = userData.avatarURL;
+                else if (userData.photoURL) userAvatar = userData.photoURL;
 
                 currentUserLevel = userData.level || 1;
 
@@ -431,6 +440,21 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);
         const missions = MissionEngine.classifyMissions(activityData, territoryStats, xpContext, xpConfig);
 
+        let victimNames: string[] = [];
+        if (victimSteals.size > 0) {
+            const victimIds = Array.from(victimSteals.keys());
+            try {
+                const victimDocs = await Promise.all(
+                    victimIds.map(id => db.collection("users").doc(id).get())
+                );
+                victimNames = victimDocs
+                    .filter(d => d.exists && d.data()?.displayName)
+                    .map(d => d.data()?.displayName as string);
+            } catch (e) {
+                console.log("Error fetching victim names:", e);
+            }
+        }
+
         // Calculate new total XP and Level
         const newTotalXP = xpContext.gamificationState.totalXP + xpBreakdown.total;
         const newLevel = GamificationService.getLevel(newTotalXP);
@@ -453,12 +477,16 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         });
 
         // C. Update Activity (with results)
-        await db.collection("activities").doc(activityId).update({
+        const activityUpdate: Record<string, unknown> = {
             xpBreakdown: xpBreakdown,
             missions: missions,
             processingStatus: "completed", // customizable
             territoryStats: territoryStats
-        });
+        };
+        if (victimNames.length > 0) {
+            activityUpdate.conqueredVictims = victimNames;
+        }
+        await db.collection("activities").doc(activityId).update(activityUpdate);
 
         // D. Notifications
         // Level Up
@@ -495,20 +523,6 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         if (victimSteals.size > 0) {
             let totalStolen = 0;
             victimSteals.forEach(count => totalStolen += count);
-
-            // Fetch victim names for a better message
-            const victimIds = Array.from(victimSteals.keys());
-            let victimNames: string[] = [];
-            try {
-                const victimDocs = await Promise.all(
-                    victimIds.map(id => db.collection("users").doc(id).get())
-                );
-                victimNames = victimDocs
-                    .filter(d => d.exists && d.data()?.displayName)
-                    .map(d => d.data()?.displayName as string);
-            } catch (e) {
-                console.log("Error fetching victim names:", e);
-            }
 
             let theftMessage = `¡Has robado ${totalStolen} territorios!`;
             if (victimNames.length > 0) {
@@ -576,6 +590,107 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             }
         }
 
+        // --- NEW: Update Recent Rivals (Theft) ---
+        if (victimSteals.size > 0) {
+            try {
+                // Helper to merge and limit rivals
+                const updateRecentRivals = (currentList: Rival[], newRivals: Rival[]): Rival[] => {
+                    const combined = [...currentList];
+                    for (const newRival of newRivals) {
+                        const existingIdx = combined.findIndex(r => r.userId === newRival.userId);
+                        if (existingIdx >= 0) {
+                            const existing = combined[existingIdx];
+                            combined[existingIdx] = {
+                                ...newRival,
+                                avatarURL: newRival.avatarURL ?? existing.avatarURL
+                            };
+                        } else {
+                            combined.push(newRival);
+                        }
+                    }
+                    // Sort by date desc
+                    combined.sort((a, b) => {
+                        const da = a.lastInteractionAt instanceof admin.firestore.Timestamp ? a.lastInteractionAt.toDate() : new Date(a.lastInteractionAt);
+                        const db = b.lastInteractionAt instanceof admin.firestore.Timestamp ? b.lastInteractionAt.toDate() : new Date(b.lastInteractionAt);
+                        return db.getTime() - da.getTime();
+                    });
+                    return combined.slice(0, 5);
+                };
+
+                // 1. Prepare Victim Data for Current User (Thief)
+                const victimIds = Array.from(victimSteals.keys());
+                const newVictims: Rival[] = [];
+
+                // Fetch victim details (name, avatar)
+                const victimDocsForRivals = await Promise.all(
+                    victimIds.map(id => db.collection("users").doc(id).get())
+                );
+
+                const victimMap = new Map<string, { name: string, avatar: string | null }>();
+                victimDocsForRivals.forEach(d => {
+                    if (d.exists) {
+                        const vd = d.data();
+                        victimMap.set(d.id, {
+                            name: vd?.displayName || "Desconocido",
+                            avatar: vd?.avatarURL || vd?.photoURL || null
+                        });
+                    }
+                });
+
+                victimSteals.forEach((count, victimId) => {
+                    const vData = victimMap.get(victimId);
+                    if (vData) {
+                        newVictims.push({
+                            userId: victimId,
+                            displayName: vData.name,
+                            avatarURL: vData.avatar,
+                            lastInteractionAt: endDate,
+                            count: count
+                        });
+                    }
+                });
+
+                // Update Current User
+                if (newVictims.length > 0) {
+                    await db.runTransaction(async (t) => {
+                        const userRef = db.collection("users").doc(userId);
+                        const doc = await t.get(userRef);
+                        const data = doc.data() || {};
+                        const currentVictims: Rival[] = data.recentTheftVictims || [];
+                        const updatedVictims = updateRecentRivals(currentVictims, newVictims);
+                        t.update(userRef, { recentTheftVictims: updatedVictims });
+                    });
+                }
+
+                // 2. Update Each Victim with Current User as Thief
+                const thiefRivalOrSelf: Rival = {
+                    userId: userId,
+                    displayName: userName,
+                    avatarURL: userAvatar,
+                    lastInteractionAt: endDate,
+                    count: 0 // To be set per victim
+                };
+
+                await Promise.all(victimIds.map(async (victimId) => {
+                    const count = victimSteals.get(victimId) || 0;
+                    const thiefEntry = { ...thiefRivalOrSelf, count: count };
+
+                    await db.runTransaction(async (t) => {
+                        const victimRef = db.collection("users").doc(victimId);
+                        const vDoc = await t.get(victimRef);
+                        if (!vDoc.exists) return;
+                        const vData = vDoc.data() || {};
+                        const currentThieves: Rival[] = vData.recentThieves || [];
+                        const updatedThieves = updateRecentRivals(currentThieves, [thiefEntry]);
+                        t.update(victimRef, { recentThieves: updatedThieves });
+                    });
+                }));
+
+            } catch (e) {
+                console.error("Error updating rival lists:", e);
+            }
+        }
+
         // E. Create Feed Event
         // Construct Feed Event matching FeedModels.swift logic
         const missionNames = missions.map(m => m.name).join(" · ");
@@ -599,6 +714,23 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         if (territoryHighlights.length > 0) subtitles.push(territoryHighlights.join(" · "));
         const subtitle = subtitles.join(" · ");
 
+        const activityDataPayload: Record<string, unknown> = {
+            activityType: activityData.activityType,
+            distanceMeters: activityData.distanceMeters,
+            durationSeconds: activityData.durationSeconds,
+            xpEarned: xpBreakdown.total,
+            newZonesCount: conquestCount,
+            defendedZonesCount: defenseCount,
+            recapturedZonesCount: recapturedCount,
+            stolenZonesCount: stealCount,
+            calories: activityData.calories || 0,
+            averageHeartRate: activityData.averageHeartRate || 0,
+            locationLabel: locationLabel
+        };
+        if (victimNames.length > 0) {
+            activityDataPayload.stolenVictimNames = victimNames;
+        }
+
         const feedEvent = {
             id: `activity-${activityId}-summary`,
             type: eventType,
@@ -611,19 +743,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             relatedUserName: userName,
             userLevel: newLevel,
             userAvatarURL: userAvatar,
-            activityData: {
-                activityType: activityData.activityType,
-                distanceMeters: activityData.distanceMeters,
-                durationSeconds: activityData.durationSeconds,
-                xpEarned: xpBreakdown.total,
-                newZonesCount: conquestCount,
-                defendedZonesCount: defenseCount,
-                recapturedZonesCount: recapturedCount,
-                stolenZonesCount: stealCount,
-                calories: activityData.calories || 0,
-                averageHeartRate: activityData.averageHeartRate || 0,
-                locationLabel: locationLabel
-            },
+            activityData: activityDataPayload,
             rarity: primaryMission ? primaryMission.rarity : null,
             miniMapRegion: calculateMiniMapRegion(territoryCellsArray),
             isPersonal: true,
@@ -633,4 +753,3 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         await db.collection("feed").add(feedEvent);
         console.log("Feed event created.");
     });
-

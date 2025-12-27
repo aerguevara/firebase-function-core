@@ -1,14 +1,15 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
-import * as admin from "firebase-admin";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 
 /**
  * Triggers when a user reacts to an activity.
  * Creates a notification for the activity owner.
  */
-export const onReactionCreated = onDocumentCreated(
-    "activity_reactions/{reactionId}",
-    async (event) => {
+export const createOnReactionCreated = (databaseId: string | undefined = undefined) =>
+    onDocumentCreated({
+        document: "activity_reactions/{reactionId}",
+        database: databaseId
+    }, async (event) => {
         const snapshot = event.data;
         if (!snapshot) return;
 
@@ -22,7 +23,7 @@ export const onReactionCreated = onDocumentCreated(
             return;
         }
 
-        const db = admin.firestore();
+        const db = databaseId ? getFirestore(databaseId) : getFirestore();
 
         try {
             // 1. Fetch Activity to get the Author
@@ -71,4 +72,4 @@ export const onReactionCreated = onDocumentCreated(
             console.error("❌ Error processing reaction:", error);
         }
     }
-);
+    );
