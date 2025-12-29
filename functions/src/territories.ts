@@ -602,6 +602,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                             const existing = combined[existingIdx];
                             combined[existingIdx] = {
                                 ...newRival,
+                                count: (existing.count || 0) + newRival.count,
                                 avatarURL: newRival.avatarURL ?? existing.avatarURL
                             };
                         } else {

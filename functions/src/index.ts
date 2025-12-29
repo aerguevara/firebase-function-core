@@ -37,6 +37,14 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
 
     try {
       const db = databaseId ? getFirestore(databaseId) : getFirestore();
+
+      // Check for Silent Mode (Maintenance)
+      const maintenanceDoc = await db.collection("config").doc("maintenance").get();
+      if (maintenanceDoc.exists && maintenanceDoc.data()?.silentMode === true) {
+        console.log("Silent Mode is active. Skipping push notification.");
+        return;
+      }
+
       const userRef = db.collection("users").doc(recipientId);
       const userDoc = await userRef.get();
 
