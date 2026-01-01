@@ -24,6 +24,7 @@ interface TerritoryCell {
     lastConqueredAt: Date; // Renamed from activityEndAt for iOS alignment
     userId: string;
     activityId?: string;
+    isHotSpot?: boolean;
 }
 
 interface Rival {
@@ -305,6 +306,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         let defenseCount = 0;
         let recapturedCount = 0;
         let stealCount = 0;
+        let lastMinuteDefenseCount = 0;
 
         // 3b. Prepare Batches for Territory Updates
         let currentBatch = db.batch();
@@ -319,6 +321,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 const isOwner = existing.userId === userId;
                 const existingTime = (existing.lastConqueredAt || existing.activityEndAt) ? (existing.lastConqueredAt || existing.activityEndAt).toDate() : new Date(0);
                 const isExpired = existing.expiresAt ? existing.expiresAt.toDate() < endDate : true;
+                const hoursLeft = existing.expiresAt ? (existing.expiresAt.toDate().getTime() - endDate.getTime()) / (1000 * 60 * 60) : 0;
 
                 if (!isOwner && !isExpired && existingTime >= endDate) {
                     continue;
@@ -357,13 +360,36 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 } else {
                     interaction = "defense";
                     defenseCount++;
+                    if (hoursLeft > 0 && hoursLeft < 6) {
+                        lastMinuteDefenseCount++;
+                    }
                 }
             } else {
                 conquestCount++;
             }
 
             const ref = db.collection("remote_territories").doc(cellId);
-            const cellWithStatus = { ...newCell, lastInteraction: interaction };
+
+            // Check History for "Hot Spot" status (> 3 owners in last 7 days)
+            let isHotSpot = false;
+            try {
+                const sevenDaysAgo = new Date(endDate.getTime() - (7 * 24 * 60 * 60 * 1000));
+                const historySnap = await ref.collection("history")
+                    .where("timestamp", ">", sevenDaysAgo)
+                    .orderBy("timestamp", "desc")
+                    .limit(5)
+                    .get();
+
+                // Count distinct userIds in the last ownership changes
+                const recentOwners = new Set(historySnap.docs.map(d => d.data().userId));
+                if (recentOwners.size >= 3) {
+                    isHotSpot = true;
+                }
+            } catch (e) {
+                console.error(`Error checking hot spot for ${cellId}:`, e);
+            }
+
+            const cellWithStatus = { ...newCell, lastInteraction: interaction, isHotSpot };
             currentBatch.set(ref, cellWithStatus);
             currentOpCount++;
 
@@ -378,6 +404,26 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             });
             currentOpCount++;
 
+            // --- NEW: Vengeance Targets Logic ---
+            if (interaction === "steal" && victimId) {
+                const vengeanceRef = db.collection("users").doc(victimId).collection("vengeance_targets").doc(cellId);
+                currentBatch.set(vengeanceRef, {
+                    cellId: cellId,
+                    centerLatitude: newCell.centerLatitude,
+                    centerLongitude: newCell.centerLongitude,
+                    thiefId: userId,
+                    thiefName: userName,
+                    stolenAt: endDate,
+                    xpReward: 25 // High Value Vengeance
+                });
+                currentOpCount++;
+            } else {
+                // If the user conquers, recaptures or defends a cell, remove it from their vengeance targets
+                const vengeanceRef = db.collection("users").doc(userId).collection("vengeance_targets").doc(cellId);
+                currentBatch.delete(vengeanceRef);
+                currentOpCount++;
+            }
+
             if (interaction === "steal" && victimId) {
                 victimSteals.set(victimId, (victimSteals.get(victimId) || 0) + 1);
             }
@@ -387,6 +433,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 await currentBatch.commit();
                 console.log(`[Batch] Intermediate commit: ${currentOpCount} docs`);
                 currentBatch = db.batch();
+                currentOpCount = 0; // Reset counter after commit
             }
         }
 
@@ -434,7 +481,8 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             newCellsCount: conquestCount,
             defendedCellsCount: defenseCount,
             recapturedCellsCount: recapturedCount,
-            stolenCellsCount: stealCount
+            stolenCellsCount: stealCount,
+            lastMinuteDefenseCount: lastMinuteDefenseCount
         };
 
         const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);

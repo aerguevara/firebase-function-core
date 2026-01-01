@@ -5,6 +5,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { createProcessActivityComplete } from "./territories";
 import { createOnReactionCreated } from "./reactions";
 import { createOnMockWorkoutCreated } from "./debug_simulation";
+import { dailyUserSync } from "./sync";
 
 admin.initializeApp();
 
@@ -173,3 +174,4 @@ export const onNotificationCreatedPRE = createOnNotificationCreated("adventure-s
 export const processActivityCompletePRE = createProcessActivityComplete("adventure-streak-pre");
 export const onReactionCreatedPRE = createOnReactionCreated("adventure-streak-pre");
 export const onMockWorkoutCreatedPRE = createOnMockWorkoutCreated("adventure-streak-pre");
+export const scheduledDailySync = dailyUserSync;

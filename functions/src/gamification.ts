@@ -77,8 +77,9 @@ export class GamificationService {
     const xpDef = stats.defendedCellsCount * config.xpPerDefendedCell;
     const xpRec = stats.recapturedCellsCount * config.xpPerRecapturedCell;
     const xpStolen = stats.stolenCellsCount * config.xpPerStolenCell;
+    const xpLastMinute = (stats.lastMinuteDefenseCount || 0) * 2; // Bono de +2 XP
 
-    return xpNew + xpDef + xpRec + xpStolen;
+    return xpNew + xpDef + xpRec + xpStolen + xpLastMinute;
   }
 
   private static computeStreakBonus(context: XPContext, maintainsStreak: boolean, config: XPConfigData): number {
