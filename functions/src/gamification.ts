@@ -1,4 +1,4 @@
-import {XPConfigData, XPContext, XPBreakdown, TerritoryStats} from "./xp_config";
+import { XPConfigData, XPContext, XPBreakdown, TerritoryStats } from "./xp_config";
 
 export class GamificationService {
   static computeXP(
@@ -57,12 +57,12 @@ export class GamificationService {
 
     let factor = config.baseFactorPerKm;
     switch (activityType) {
-    case "run": factor *= config.factorRun; break;
-    case "bike": factor *= config.factorBike; break;
-    case "walk": factor *= config.factorWalk; break;
-    case "hike": factor *= config.factorWalk; break;
-    case "otherOutdoor": factor *= config.factorOther; break;
-    case "indoor": factor *= config.factorIndoor; break;
+      case "run": factor *= config.factorRun; break;
+      case "bike": factor *= config.factorBike; break;
+      case "walk": factor *= config.factorWalk; break;
+      case "hike": factor *= config.factorWalk; break;
+      case "otherOutdoor": factor *= config.factorOther; break;
+      case "indoor": factor *= config.factorIndoor; break;
     }
 
     const rawXP = Math.floor(distanceKm * factor);
@@ -76,8 +76,9 @@ export class GamificationService {
     const xpNew = effectiveNewCells * config.xpPerNewCell;
     const xpDef = stats.defendedCellsCount * config.xpPerDefendedCell;
     const xpRec = stats.recapturedCellsCount * config.xpPerRecapturedCell;
+    const xpStolen = stats.stolenCellsCount * config.xpPerStolenCell;
 
-    return xpNew + xpDef + xpRec;
+    return xpNew + xpDef + xpRec + xpStolen;
   }
 
   private static computeStreakBonus(context: XPContext, maintainsStreak: boolean, config: XPConfigData): number {

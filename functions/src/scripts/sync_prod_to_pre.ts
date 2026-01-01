@@ -22,45 +22,59 @@ async function syncProdToPre() {
     const dbProd = getFirestore();
     const dbPre = getFirestore("adventure-streak-pre");
 
-    const collections = [
-        "activities",
-        "activity_reaction_stats",
-        "activity_reactions",
-        "config",
-        "debug_mock_workouts",
-        "feed",
-        "notifications",
-        "remote_territories",
-        "reserved_icons",
-        "users"
-    ];
+    try {
+        // ACTIVAR MODO SILENCIOSO ANTES DE EMPEZAR
+        await setSilentMode(dbPre, true);
 
-    for (const colName of collections) {
-        console.log(`📦 Syncing collection: ${colName}...`);
+        const collections = [
+            "activities",
+            "activity_reaction_stats",
+            "activity_reactions",
+            "config",
+            "debug_mock_workouts",
+            "feed",
+            "notifications",
+            "remote_territories",
+            "reserved_icons",
+            "users"
+        ];
 
-        let lastDoc = null;
-        let totalSynced = 0;
-        const pageSize = 100;
+        for (const colName of collections) {
+            console.log(`📦 Syncing collection: ${colName}...`);
 
-        while (true) {
-            let query = dbProd.collection(colName).limit(pageSize);
-            if (lastDoc) {
-                query = query.startAfter(lastDoc);
+            let lastDoc = null;
+            let totalSynced = 0;
+            const pageSize = 100;
+
+            while (true) {
+                let query = dbProd.collection(colName).limit(pageSize);
+                if (lastDoc) {
+                    query = query.startAfter(lastDoc);
+                }
+
+                const snapshot = await query.get();
+                if (snapshot.empty) break;
+
+                for (const doc of snapshot.docs) {
+                    await copyDocRecursive(doc, dbPre);
+                    totalSynced++;
+                    lastDoc = doc;
+                }
+                console.log(`   Progress ${colName}: ${totalSynced} synced...`);
             }
-
-            const snapshot = await query.get();
-            if (snapshot.empty) break;
-
-            for (const doc of snapshot.docs) {
-                await copyDocRecursive(doc, dbPre);
-                totalSynced++;
-                lastDoc = doc;
-            }
-            console.log(`   Progress ${colName}: ${totalSynced} synced...`);
         }
-    }
 
-    console.log("🏁 Sync Complete.");
+        console.log("🏁 Sync Complete.");
+    } finally {
+        // Opcional: podríamos desactivarlo aquí, pero como vamos a ejecutar
+        // los scripts de reset justo después, mejor dejarlo activo por seguridad.
+        // await setSilentMode(dbPre, false);
+    }
+}
+
+async function setSilentMode(db: admin.firestore.Firestore, active: boolean) {
+    console.log(`🔧 Setting Silent Mode to ${active} in ${db.databaseId}...`);
+    await db.collection("config").doc("maintenance").set({ silentMode: active }, { merge: true });
 }
 
 async function copyDocRecursive(doc: admin.firestore.QueryDocumentSnapshot | admin.firestore.DocumentSnapshot, targetDb: admin.firestore.Firestore) {

@@ -34,7 +34,12 @@ export class MissionEngine {
             missions.push(this.createRecaptureMission(userId, territoryStats));
         }
 
-        // 3. Streak Mission
+        // 3. Theft Mission
+        if (territoryStats.stolenCellsCount > 0) {
+            missions.push(this.createTheftMission(userId, territoryStats));
+        }
+
+        // 4. Streak Mission
         if (context.currentStreakWeeks > 0) {
             missions.push(this.createStreakMission(userId, context.currentStreakWeeks));
         }
@@ -99,6 +104,35 @@ export class MissionEngine {
             name: "Reconquista",
             description: `Has recuperado ${stats.recapturedCellsCount} territorios perdidos`,
             rarity: "epic"
+        };
+    }
+
+    private static createTheftMission(userId: string, stats: TerritoryStats): Mission {
+        const stealCount = stats.stolenCellsCount;
+        let rarity: MissionRarity;
+        let name: string;
+        let description: string;
+
+        if (stealCount <= 2) {
+            rarity = "common";
+            name = "Incursión";
+            description = `Has robado ${stealCount} territorios a otros usuarios`;
+        } else if (stealCount <= 10) {
+            rarity = "rare";
+            name = "Saqueo";
+            description = `¡Gran golpe! ${stealCount} territorios robados`;
+        } else {
+            rarity = "epic";
+            name = "Invasión";
+            description = `¡Dominación total! Has arrebatado ${stealCount} territorios`;
+        }
+
+        return {
+            userId,
+            category: "territorial",
+            name,
+            description,
+            rarity
         };
     }
 

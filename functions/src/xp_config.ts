@@ -17,6 +17,7 @@ export interface XPConfigData {
     xpPerNewCell: number;
     xpPerDefendedCell: number;
     xpPerRecapturedCell: number;
+    xpPerStolenCell: number;
     maxNewCellsXPPerActivity: number;
     baseStreakXPPerWeek: number;
     weeklyRecordBaseXP: number;
@@ -42,6 +43,7 @@ export const defaultXPConfig: XPConfigData = {
     xpPerNewCell: 8,
     xpPerDefendedCell: 3,
     xpPerRecapturedCell: 12,
+    xpPerStolenCell: 20,
     maxNewCellsXPPerActivity: 50,
 
     baseStreakXPPerWeek: 10,  // XP = 10 * currentStreakWeeks
