@@ -176,6 +176,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         const beforeData = change.before.data();
         const afterData = change.after.data();
         const activityId = event.params.activityId;
+        console.log(`ANTIGRAVITY DEBUG: Processing Activity ${activityId}`);
 
         if (!afterData) return;
 
@@ -409,11 +410,13 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 const vengeanceRef = db.collection("users").doc(victimId).collection("vengeance_targets").doc(cellId);
                 currentBatch.set(vengeanceRef, {
                     cellId: cellId,
+                    activityId: activityId,
                     centerLatitude: newCell.centerLatitude,
                     centerLongitude: newCell.centerLongitude,
                     thiefId: userId,
                     thiefName: userName,
                     stolenAt: endDate,
+                    locationLabel: locationLabel,
                     xpReward: 25 // High Value Vengeance
                 });
                 currentOpCount++;
