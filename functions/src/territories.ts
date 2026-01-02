@@ -208,6 +208,23 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             ? activityData.endDate.toDate()
             : new Date(activityData.endDate || Date.now());
 
+        // --- SAFETY GUARD: REJECT LEGACY ACTIVITIES ---
+        // Prevents client from re-uploading old activities (e.g. November) after a Reset.
+        const RESET_CUTOFF_DATE = new Date("2025-12-01T00:00:00Z");
+        if (endDate < RESET_CUTOFF_DATE) {
+            console.warn(`[GUARD] Activity ${activityId} rejected (Date: ${endDate.toISOString()} < ${RESET_CUTOFF_DATE.toISOString()}). Moving to 'activities_legacy_rejected'.`);
+
+            const db = databaseId ? getFirestore(databaseId) : getFirestore();
+            await db.collection("activities_legacy_rejected").doc(activityId).set({
+                ...activityData,
+                rejectedAt: FieldValue.serverTimestamp(),
+                reason: "Legacy activity re-uploaded by client after reset"
+            });
+            await db.collection("activities").doc(activityId).delete();
+            return;
+        }
+        // ----------------------------------------------
+
         // 0. Fetch User Profile & Stats (Context)
         let userName = activityData.userName || "Adventurer";
         let userAvatar = activityData.userAvatarURL || null;
@@ -708,41 +725,49 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                     }
                 });
 
-                // Update Current User
                 if (newVictims.length > 0) {
                     await db.runTransaction(async (t) => {
+                        // 1. READ ALL INVOLVED DOCUMENTS
                         const userRef = db.collection("users").doc(userId);
-                        const doc = await t.get(userRef);
-                        const data = doc.data() || {};
-                        const currentVictims: Rival[] = data.recentTheftVictims || [];
-                        const updatedVictims = updateRecentRivals(currentVictims, newVictims);
-                        t.update(userRef, { recentTheftVictims: updatedVictims });
+                        const victimRefs = victimIds.map(id => db.collection("users").doc(id));
+
+                        const userDoc = await t.get(userRef);
+                        const victimDocs = await Promise.all(victimRefs.map(ref => t.get(ref)));
+
+                        // 2. PREPARE UPDATES
+
+                        // Update Current User (Thief) -> recentTheftVictims
+                        if (userDoc.exists) {
+                            const data = userDoc.data() || {};
+                            const currentVictims: Rival[] = data.recentTheftVictims || [];
+                            const updatedVictims = updateRecentRivals(currentVictims, newVictims);
+                            t.update(userRef, { recentTheftVictims: updatedVictims });
+                        }
+
+                        // Update Each Victim -> recentThieves
+                        const thiefRivalOrSelf: Rival = {
+                            userId: userId,
+                            displayName: userName,
+                            avatarURL: userAvatar,
+                            lastInteractionAt: endDate,
+                            count: 0 // To be set per victim
+                        };
+
+                        victimDocs.forEach((vDoc, index) => {
+                            if (vDoc.exists) {
+                                const victimId = vDoc.id;
+                                const count = victimSteals.get(victimId) || 0;
+                                const thiefEntry = { ...thiefRivalOrSelf, count: count };
+
+                                const vData = vDoc.data() || {};
+                                const currentThieves: Rival[] = vData.recentThieves || [];
+                                const updatedThieves = updateRecentRivals(currentThieves, [thiefEntry]);
+                                t.update(vDoc.ref, { recentThieves: updatedThieves });
+                            }
+                        });
                     });
                 }
 
-                // 2. Update Each Victim with Current User as Thief
-                const thiefRivalOrSelf: Rival = {
-                    userId: userId,
-                    displayName: userName,
-                    avatarURL: userAvatar,
-                    lastInteractionAt: endDate,
-                    count: 0 // To be set per victim
-                };
-
-                await Promise.all(victimIds.map(async (victimId) => {
-                    const count = victimSteals.get(victimId) || 0;
-                    const thiefEntry = { ...thiefRivalOrSelf, count: count };
-
-                    await db.runTransaction(async (t) => {
-                        const victimRef = db.collection("users").doc(victimId);
-                        const vDoc = await t.get(victimRef);
-                        if (!vDoc.exists) return;
-                        const vData = vDoc.data() || {};
-                        const currentThieves: Rival[] = vData.recentThieves || [];
-                        const updatedThieves = updateRecentRivals(currentThieves, [thiefEntry]);
-                        t.update(victimRef, { recentThieves: updatedThieves });
-                    });
-                }));
 
             } catch (e) {
                 console.error("Error updating rival lists:", e);
