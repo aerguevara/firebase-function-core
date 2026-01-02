@@ -25,6 +25,7 @@ interface TerritoryCell {
     userId: string;
     activityId?: string;
     isHotSpot?: boolean;
+    locationLabel?: string; // NEW: Store location label
 }
 
 interface Rival {
@@ -79,14 +80,14 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number):
 }
 
 // Interpolate points between start and end to ensure we hit all cells
-function getCellsBetween(start: RoutePoint, end: RoutePoint, now: Date, userId: string, activityId: string, expirationDays: number): Map<string, TerritoryCell> {
+function getCellsBetween(start: RoutePoint, end: RoutePoint, now: Date, userId: string, activityId: string, expirationDays: number, locationLabel: string | null): Map<string, TerritoryCell> {
     const cells = new Map<string, TerritoryCell>();
     const dist = distanceMeters(start.latitude, start.longitude, end.latitude, end.longitude);
 
     if (dist < 10) {
         const { x, y } = getCellIndex(start.latitude, start.longitude);
         const id = getCellId(x, y);
-        cells.set(id, createCell(x, y, now, userId, activityId, expirationDays));
+        cells.set(id, createCell(x, y, now, userId, activityId, expirationDays, locationLabel));
         return cells;
     }
 
@@ -101,13 +102,13 @@ function getCellsBetween(start: RoutePoint, end: RoutePoint, now: Date, userId: 
         const { x, y } = getCellIndex(lat, lon);
         const id = getCellId(x, y);
         if (!cells.has(id)) {
-            cells.set(id, createCell(x, y, now, userId, activityId, expirationDays));
+            cells.set(id, createCell(x, y, now, userId, activityId, expirationDays, locationLabel));
         }
     }
     return cells;
 }
 
-function createCell(x: number, y: number, now: Date, userId: string, activityId: string, expirationDays: number): TerritoryCell {
+function createCell(x: number, y: number, now: Date, userId: string, activityId: string, expirationDays: number, locationLabel: string | null): TerritoryCell {
     const center = getCellCenter(x, y);
     // Use dynamic expirationDays passed from config
     const expiresAt = new Date(now.getTime() + (expirationDays * 24 * 60 * 60 * 1000));
@@ -121,6 +122,7 @@ function createCell(x: number, y: number, now: Date, userId: string, activityId:
         lastConqueredAt: now, // Renamed from activityEndAt for iOS alignment
         userId: userId,
         activityId: activityId,
+        locationLabel: locationLabel || undefined,
     };
 }
 
@@ -281,10 +283,10 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         if (allPoints.length > 0) {
             const startIdx = getCellIndex(allPoints[0].latitude, allPoints[0].longitude);
             const startId = getCellId(startIdx.x, startIdx.y);
-            traversedCells.set(startId, createCell(startIdx.x, startIdx.y, endDate, userId, activityId, expirationDays));
+            traversedCells.set(startId, createCell(startIdx.x, startIdx.y, endDate, userId, activityId, expirationDays, locationLabel));
 
             for (let i = 0; i < allPoints.length - 1; i++) {
-                const segCells = getCellsBetween(allPoints[i], allPoints[i + 1], endDate, userId, activityId, expirationDays);
+                const segCells = getCellsBetween(allPoints[i], allPoints[i + 1], endDate, userId, activityId, expirationDays, locationLabel);
                 segCells.forEach((cell, id) => traversedCells.set(id, cell));
             }
         }
@@ -406,8 +408,16 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             currentOpCount++;
 
             // --- NEW: Vengeance Targets Logic ---
+
+            // 1. ALWAYS clean up vengeance for the current user if they are interacting with this cell
+            // (fixes the "steal back" bug where vengeance wasn't removed if the interaction was 'steal')
+            const selfVengeanceRef = db.collection("users").doc(userId).collection("vengeance_targets").doc(cellId);
+            currentBatch.delete(selfVengeanceRef);
+            currentOpCount++;
+
             if (interaction === "steal" && victimId) {
                 const vengeanceRef = db.collection("users").doc(victimId).collection("vengeance_targets").doc(cellId);
+                const vengeanceExpiration = new Date(endDate.getTime() + (7 * 24 * 60 * 60 * 1000)); // 7 days TTL (1 week)
                 currentBatch.set(vengeanceRef, {
                     cellId: cellId,
                     activityId: activityId,
@@ -416,14 +426,10 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                     thiefId: userId,
                     thiefName: userName,
                     stolenAt: endDate,
+                    expiresAt: vengeanceExpiration, // NEW: For TTL cleanup
                     locationLabel: locationLabel,
                     xpReward: 25 // High Value Vengeance
                 });
-                currentOpCount++;
-            } else {
-                // If the user conquers, recaptures or defends a cell, remove it from their vengeance targets
-                const vengeanceRef = db.collection("users").doc(userId).collection("vengeance_targets").doc(cellId);
-                currentBatch.delete(vengeanceRef);
                 currentOpCount++;
             }
 
