@@ -77,9 +77,24 @@ export class GamificationService {
     const xpDef = stats.defendedCellsCount * config.xpPerDefendedCell;
     const xpRec = stats.recapturedCellsCount * config.xpPerRecapturedCell;
     const xpStolen = stats.stolenCellsCount * config.xpPerStolenCell;
-    const xpLastMinute = (stats.lastMinuteDefenseCount || 0) * 2; // Bono de +2 XP
+    const xpVengeance = (stats.vengeanceCellsCount || 0) * config.vengeanceXPReward;
+    const xpLastMinute = (stats.lastMinuteDefenseCount || 0) * config.lastMinuteDefenseBonus;
 
-    return xpNew + xpDef + xpRec + xpStolen + xpLastMinute;
+    // New Hardened & Loot values
+    const xpLoot = stats.totalLootXP || 0;
+    const xpConsolidation = stats.totalConsolidationXP || 0;
+
+    // Streak Interruption (If we stole any cell from a user with a streak)
+    // Note: This logic depends on whether we detected a streak interruption in territories.ts
+    // For now, we add the total provided by stats if we decide to pre-calculate it,
+    // or we can add a flag to stats if it happened.
+    // Let's assume we add a field `streakInterruptionCount` or similar if needed.
+    // Actually, I'll add xpStreakInterruption if any steal happened and we detected the victim had a streak.
+
+    // In this MVP, we assume totalLootXP already contains the days-based looting.
+    const xpStreakInterruption = stats.totalStreakInterruptionXP || 0;
+
+    return xpNew + xpDef + xpRec + xpStolen + xpVengeance + xpLastMinute + xpLoot + xpConsolidation + xpStreakInterruption;
   }
 
   private static computeStreakBonus(context: XPContext, maintainsStreak: boolean, config: XPConfigData): number {

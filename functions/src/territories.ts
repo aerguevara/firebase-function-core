@@ -4,7 +4,9 @@ import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { XPContext, TerritoryStats, fetchXPConfig } from "./xp_config";
 import { GamificationService } from "./gamification";
+
 import { MissionEngine } from "./missions";
+import { BadgeService } from "./badges";
 
 // Grid configuration matching TerritoryGrid.swift
 const CELL_SIZE_DEGREES = 0.002;
@@ -26,6 +28,8 @@ interface TerritoryCell {
     activityId?: string;
     isHotSpot?: boolean;
     locationLabel?: string; // NEW: Store location label
+    firstConqueredAt?: admin.firestore.Timestamp; // Track continuous control
+    defenseCount?: number; // Total defenses on this cell
 }
 
 interface Rival {
@@ -123,7 +127,9 @@ function createCell(x: number, y: number, now: Date, userId: string, activityId:
         userId: userId,
         activityId: activityId,
         locationLabel: locationLabel || undefined,
-    };
+        firstConqueredAt: admin.firestore.Timestamp.fromDate(now),
+        defenseCount: 0
+    } as any;
 }
 
 /**
@@ -241,6 +247,11 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
 
                 currentUserLevel = userData.level || 1;
 
+                // --- PRE-FETCH VENGEANCE TARGETS ---
+                const vengeanceSnapshot = await db.collection("users").doc(userId).collection("vengeance_targets").get();
+                const userVengeanceIds = new Set(vengeanceSnapshot.docs.map(doc => doc.id));
+                // ------------------------------------
+
                 xpContext = {
                     userId,
                     currentWeekDistanceKm: userData.currentWeekDistanceKm || 0, // Mocked/stored
@@ -251,7 +262,8 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                         totalXP: userData.xp || 0,
                         level: currentUserLevel,
                         currentStreakWeeks: userData.currentStreakWeeks || 0
-                    }
+                    },
+                    userVengeanceIds // Pass the pre-fetched IDs
                 };
             }
         } catch (e) {
@@ -326,7 +338,11 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         let defenseCount = 0;
         let recapturedCount = 0;
         let stealCount = 0;
+        let vengeanceCount = 0;
         let lastMinuteDefenseCount = 0;
+        let totalLootXP = 0;
+        let totalConsolidationXP = 0;
+        let totalStreakInterruptionXP = 0;
 
         // 3b. Prepare Batches for Territory Updates
         let currentBatch = db.batch();
@@ -376,10 +392,40 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 } else if (!isOwner) {
                     interaction = "steal";
                     victimId = existing.userId;
-                    stealCount++;
+
+                    // --- ACCUMULATED LOOT CALCULATION ---
+                    const firstConqTS = existing.firstConqueredAt || existing.lastConqueredAt || existing.activityEndAt;
+                    const firstConqDate = firstConqTS instanceof admin.firestore.Timestamp ? firstConqTS.toDate() : new Date(firstConqTS);
+                    const ageInDays = Math.floor((endDate.getTime() - firstConqDate.getTime()) / (1000 * 60 * 60 * 24));
+
+                    if (ageInDays > 0) {
+                        totalLootXP += ageInDays * xpConfig.xpLootPerDay;
+                    }
+                    // -------------------------------------
+
+                    // --- EXCLUSIVE VENGEANCE LOGIC ---
+                    if (xpContext.userVengeanceIds?.has(cellId)) {
+                        vengeanceCount++;
+                    } else {
+                        stealCount++;
+                    }
+                    // ---------------------------------
                 } else {
                     interaction = "defense";
                     defenseCount++;
+
+                    // --- CONSOLIDATION BONUS CALCULATION ---
+                    const firstConqTS = existing.firstConqueredAt || existing.lastConqueredAt || existing.activityEndAt;
+                    const firstConqDate = firstConqTS instanceof admin.firestore.Timestamp ? firstConqTS.toDate() : new Date(firstConqTS);
+                    const ageInDays = Math.floor((endDate.getTime() - firstConqDate.getTime()) / (1000 * 60 * 60 * 24));
+
+                    if (ageInDays >= 25) {
+                        totalConsolidationXP += xpConfig.xpConsolidation25DayBonus;
+                    } else if (ageInDays >= 15) {
+                        totalConsolidationXP += xpConfig.xpConsolidation15DayBonus;
+                    }
+                    // ---------------------------------------
+
                     if (hoursLeft > 0 && hoursLeft < 6) {
                         lastMinuteDefenseCount++;
                     }
@@ -424,6 +470,17 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             });
             currentOpCount++;
 
+            // Update cell with new fields
+            const finalProcessedCell = {
+                ...newCell,
+                lastInteraction: interaction,
+                isHotSpot,
+                firstConqueredAt: (interaction === "defense") ? (existing.firstConqueredAt || existing.lastConqueredAt || newCell.firstConqueredAt) : newCell.firstConqueredAt,
+                defenseCount: (interaction === "defense") ? (existing.defenseCount || 0) + 1 : 0
+            };
+            currentBatch.set(ref, finalProcessedCell);
+            currentOpCount++;
+
             // --- NEW: Vengeance Targets Logic ---
 
             // 1. ALWAYS clean up vengeance for the current user if they are interacting with this cell
@@ -445,7 +502,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                     stolenAt: endDate,
                     expiresAt: vengeanceExpiration, // NEW: For TTL cleanup
                     locationLabel: locationLabel,
-                    xpReward: 25 // High Value Vengeance
+                    xpReward: xpConfig.vengeanceXPReward // Use value from config
                 });
                 currentOpCount++;
             }
@@ -508,8 +565,38 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             defendedCellsCount: defenseCount,
             recapturedCellsCount: recapturedCount,
             stolenCellsCount: stealCount,
-            lastMinuteDefenseCount: lastMinuteDefenseCount
+            vengeanceCellsCount: vengeanceCount,
+            lastMinuteDefenseCount: lastMinuteDefenseCount,
+            totalLootXP: totalLootXP,
+            totalConsolidationXP: totalConsolidationXP,
+            totalStreakInterruptionXP: totalStreakInterruptionXP
         };
+
+        // --- FETCH VICTIM PROFILES FOR STREAK INTERRUPTION ---
+        const victimIds = Array.from(victimSteals.keys());
+        const victimProfiles = new Map<string, any>();
+        if (victimIds.length > 0) {
+            const victimDocs = await Promise.all(victimIds.map(id => db.collection("users").doc(id).get()));
+            victimDocs.forEach(doc => {
+                if (doc.exists) victimProfiles.set(doc.id, doc.data());
+            });
+
+            // Recalculate streak interruption bonus now that we have victim profiles
+            // Actually, it's better to do this inside the loop if possible, 
+            // but we need the profiles.
+            // Let's do a second pass or check it here
+            for (const [cellId] of traversedCells.entries()) {
+                const existing = existingRemotes.get(cellId);
+                if (existing && existing.userId !== userId && !existing.isExpired) {
+                    const victim = victimProfiles.get(existing.userId);
+                    if (victim && (victim.currentStreakWeeks || 0) > 0) {
+                        totalStreakInterruptionXP += xpConfig.xpStreakInterruptionBonus;
+                    }
+                }
+            }
+            territoryStats.totalStreakInterruptionXP = totalStreakInterruptionXP;
+        }
+        // -----------------------------------------------------
 
         const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);
         const missions = MissionEngine.classifyMissions(activityData, territoryStats, xpContext, xpConfig);
@@ -533,16 +620,26 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         const newTotalXP = xpContext.gamificationState.totalXP + xpBreakdown.total;
         const newLevel = GamificationService.getLevel(newTotalXP);
 
-        // 5. Update Operations
-
-        // A. Territory Batch Commit is now handled above in the loop
-
-        // B. Update User Profile (XP, Level, Last Updated, cumulative counters)
+        // 5b. Update User Profile (XP, Level, Last Updated, cumulative counters)
+        // CRITICAL: Calculate current active owned cells count from backend
+        let activeOwnedCount = 0;
+        try {
+            const ownedSnapshot = await db.collection("remote_territories")
+                .where("userId", "==", userId)
+                .where("expiresAt", ">", endDate)
+                .count()
+                .get();
+            activeOwnedCount = ownedSnapshot.data().count;
+        } catch (e) {
+            console.error("Error counting active territories:", e);
+        }
 
         await db.collection("users").doc(userId).update({
             xp: newTotalXP,
             level: newLevel,
             lastActivityDate: endDate,
+            totalActivities: FieldValue.increment(1),
+            totalCellsOwned: activeOwnedCount, // Server-side truth for "active" inventory
             totalConqueredTerritories: FieldValue.increment(conquestCount),
             totalStolenTerritories: FieldValue.increment(stealCount),
             totalDefendedTerritories: FieldValue.increment(defenseCount),
@@ -662,6 +759,25 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             } catch (e) {
                 console.error("Error sending follower notifications:", e);
             }
+        }
+
+
+        // --- BADGES INTEGRATION ---
+        try {
+            await BadgeService.checkActivityBadges(
+                db,
+                userId,
+                activityData,
+                territoryStats,
+                xpContext,
+                xpBreakdown,
+                victimSteals,
+                existingRemotes,
+                traversedCells,
+                victimProfiles
+            );
+        } catch (e) {
+            console.error("Error checking badges:", e);
         }
 
         // --- NEW: Update Recent Rivals (Theft) ---

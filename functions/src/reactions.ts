@@ -1,5 +1,6 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { BadgeService } from "./badges";
 
 /**
  * Triggers when a user reacts to an activity.
@@ -67,6 +68,13 @@ export const createOnReactionCreated = (databaseId: string | undefined = undefin
             });
 
             console.log(`✅ Notification sent to ${authorId} for reaction ${reactionType} from ${reactorName}`);
+
+            // --- BADGES ---
+            // 1. Recipient (Author) gets "reaction_received" check
+            await BadgeService.checkSocialBadges(db, "reaction_received", authorId, { activityId });
+
+            // 2. Sender (Reactor) gets "reaction_given" check
+            await BadgeService.checkSocialBadges(db, "reaction_given", reactorId, { activityId });
 
         } catch (error) {
             console.error("❌ Error processing reaction:", error);

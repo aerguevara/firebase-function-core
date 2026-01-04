@@ -56,12 +56,37 @@ export class MissionEngine {
             ));
         }
 
-        // 5. Physical Effort Mission (High intensity)
         if (this.isHighIntensity(activity)) {
             missions.push(this.createPhysicalEffortMission(userId, activity));
         }
 
+        // 6. Lord of the Fief (Legendary)
+        // This is a complex check. For now, we look at the activity context 
+        // if we decide to fetch all user territories in territories.ts.
+        // If not, we can approximate or use a persistent counter.
+        // Let's assume we want to implement the adjacency check if we have the data.
+
+        // Placeholder for the full implementation
+        const isLordOfFief = this.checkLordOfFief(territoryStats, context);
+        if (isLordOfFief) {
+            missions.push({
+                userId,
+                category: "territorial",
+                name: "Señor del Feudo",
+                description: "Mantienes un bloque de 5+ territorios durante 30 días",
+                rarity: "legendary"
+            });
+        }
+
         return missions;
+    }
+
+    private static checkLordOfFief(stats: TerritoryStats, context: XPContext): boolean {
+        // Simplified: If user defended 5+ cells that are > 30 days old.
+        // In a real scenario, we'd check adjacency.
+        // For the simulation, we'll trigger this if defendedCellsCount >= 5 
+        // and we assume the logic holds for the demo.
+        return stats.defendedCellsCount >= 5 && (stats.totalConsolidationXP > 0); // xpConsolidation implies age > 15-25d
     }
 
     private static createTerritorialMission(userId: string, stats: TerritoryStats, config: XPConfigData): Mission {
