@@ -4,8 +4,10 @@ import * as admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import { createProcessActivityComplete } from "./territories";
 import { createOnReactionCreated } from "./reactions";
+import { BADGES } from "./badges";
 import { createOnMockWorkoutCreated } from "./debug_simulation";
 import { dailyUserSync } from "./sync";
+import { engagementHourlyJob, engagementRoutineJob } from "./engagement";
 
 admin.initializeApp();
 
@@ -73,11 +75,17 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
       let body = "¡Tienes una nueva alerta!";
 
       switch (data.type) {
-        case "reaction":
+        case "reaction": {
           title = "¡Nueva reacción! 🔥";
-          body = `${data.senderName} reaccionó con ${data.reactionType} ` +
-            "a tu actividad.";
+          const reactionEmojis: Record<string, string> = {
+            "fire": "🔥",
+            "sword": "⚔️",
+            "shield": "🛡️"
+          };
+          const emoji = reactionEmojis[data.reactionType] || data.reactionType || "✨";
+          body = `${data.senderName} reaccionó con ${emoji} a tu actividad.`;
           break;
+        }
         case "follow":
           title = "¡Nuevo seguidor! 👥";
           body = `${data.senderName} ahora sigue tus aventuras.`;
@@ -88,7 +96,9 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
             const level = data.badgeId.split("_").pop();
             body = `¡Felicidades! ¡Has alcanzado el Nivel ${level}!`;
           } else {
-            body = `¡Has ganado la insignia ${data.badgeId || "Recompensa"}!`;
+            const badge = BADGES.find((b) => b.id === data.badgeId);
+            const badgeName = badge ? badge.name : (data.badgeId || "Recompensa");
+            body = `¡Has ganado la insignia ${badgeName}!`;
           }
           break;
         case "territory_conquered":
@@ -99,9 +109,9 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
           break;
         case "territory_stolen":
           title = "¡Territorio Robado! ⚔️";
-          body = data.locationLabel
+          body = data.message || (data.locationLabel
             ? `¡${data.senderName} te ha robado un territorio en ${data.locationLabel}! ¡Recupéralo!`
-            : `¡${data.senderName} te ha robado un territorio! ¡Recupéralo!`;
+            : `¡${data.senderName} te ha robado un territorio! ¡Recupéralo!`);
           break;
         case "territory_defended":
           title = "¡Territorio Defendido! 🛡️";
@@ -123,6 +133,26 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
             const locationText = data.locationLabel ? ` en ${data.locationLabel}` : "";
             body = `${data.senderName} ha obtenido ${countText}${locationText}.`;
           }
+          break;
+        case "streak_saver":
+          title = "¡Salva tu racha! 🔥";
+          body = data.message || `No dejes que tu racha de ${data.streakWeeks} semanas se pierda. ¡Entrena hoy!`;
+          break;
+        case "territory_guardian":
+          title = "¡Alerta de Guardián! 🛡️";
+          body = data.message || `Tu territorio en ${data.locationLabel || "el mapa"} está a punto de expirar.`;
+          break;
+        case "vengeance_reminder":
+          title = "¡La venganza te espera! ⚔️";
+          body = data.message || `Tienes oportunidades de venganza pendientes. ¡Recupera tu territorio!`;
+          break;
+        case "rival_radar":
+          title = "¡Radar de Rivales! 🚩";
+          body = `${data.senderName} está conquistando cerca de tu zona. ¡Vigila tus fronteras!`;
+          break;
+        case "weekly_recap":
+          title = "Tu semana en Adventure Streak 🏆";
+          body = data.message || "Has tenido una semana increíble. ¡Mira tus estadísticas!";
           break;
         case "workout_import":
           // Legacy or handled elsewhere if needed, but not triggered from territories.ts anymore
@@ -175,3 +205,7 @@ export const processActivityCompletePRE = createProcessActivityComplete("adventu
 export const onReactionCreatedPRE = createOnReactionCreated("adventure-streak-pre");
 export const onMockWorkoutCreatedPRE = createOnMockWorkoutCreated("adventure-streak-pre");
 export const scheduledDailySync = dailyUserSync;
+export const hourlyEngagement = engagementHourlyJob;
+export const routineEngagement = engagementRoutineJob;
+export const hourlyEngagementPRE = engagementHourlyJob; // Using PROD logic for PRE too
+export const routineEngagementPRE = engagementRoutineJob;
