@@ -7,6 +7,7 @@ import { GamificationService } from "./gamification";
 
 import { MissionEngine } from "./missions";
 import { BadgeService } from "./badges";
+import * as geofire from "geofire-common";
 
 // Grid configuration matching TerritoryGrid.swift
 const CELL_SIZE_DEGREES = 0.002;
@@ -30,6 +31,7 @@ interface TerritoryCell {
     locationLabel?: string; // NEW: Store location label
     firstConqueredAt?: admin.firestore.Timestamp; // Track continuous control
     defenseCount?: number; // Total defenses on this cell
+    geohash?: string; // NEW: Added for efficient spatial queries
 }
 
 interface Rival {
@@ -128,7 +130,8 @@ function createCell(x: number, y: number, now: Date, userId: string, activityId:
         activityId: activityId,
         locationLabel: locationLabel || undefined,
         firstConqueredAt: admin.firestore.Timestamp.fromDate(now),
-        defenseCount: 0
+        defenseCount: 0,
+        geohash: geofire.geohashForLocation([center.latitude, center.longitude])
     } as any;
 }
 
@@ -263,6 +266,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                         level: currentUserLevel,
                         currentStreakWeeks: userData.currentStreakWeeks || 0
                     },
+                    lastActivityDate: userData.lastActivityDate || null, // Guardar para calculo de racha
                     userVengeanceIds // Pass the pre-fetched IDs
                 };
             }
@@ -621,6 +625,48 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         const newLevel = GamificationService.getLevel(newTotalXP);
 
         // 5b. Update User Profile (XP, Level, Last Updated, cumulative counters)
+
+        // --- CALCULAR RACHA (currentStreakWeeks) ---
+        let newStreak = xpContext.currentStreakWeeks;
+        try {
+            const calendarRef = new Date(0); // 1970-01-01
+
+            // Función para obtener "indices de semana" consistentes con la app
+            const getWeekIndex = (date: Date) => {
+                const diffTime = date.getTime() - calendarRef.getTime();
+                return Math.floor(diffTime / (7 * 24 * 60 * 60 * 1000));
+            };
+
+            const currentWeekIdx = getWeekIndex(endDate);
+
+            const lastActivityTS = (xpContext as any).lastActivityDate;
+            if (lastActivityTS) {
+                const lastDate = lastActivityTS instanceof admin.firestore.Timestamp ? lastActivityTS.toDate() : new Date(lastActivityTS);
+                const lastWeekIdx = getWeekIndex(lastDate);
+
+                if (currentWeekIdx === lastWeekIdx + 1) {
+                    // Nueva semana: incrementamos racha
+                    newStreak += 1;
+                    console.log(`🔥 Streak incremented to ${newStreak} for user ${userId}`);
+                } else if (currentWeekIdx > lastWeekIdx + 1) {
+                    // Racha rota: reseteamos a 1
+                    newStreak = 1;
+                    console.log(`❄️ Streak reset to 1 for user ${userId} (Last week was ${lastWeekIdx}, current is ${currentWeekIdx})`);
+                } else if (currentWeekIdx === lastWeekIdx) {
+                    // Misma semana: la racha se mantiene igual (mínimo 1)
+                    if (newStreak === 0) newStreak = 1;
+                    console.log(`✨ Streak maintained at ${newStreak} for user ${userId} (same week)`);
+                }
+            } else {
+                // Primera actividad registrada: racha empieza en 1
+                newStreak = 1;
+                console.log(`🌱 Streak started at 1 for user ${userId}`);
+            }
+        } catch (e) {
+            console.error("Error calculating streak:", e);
+        }
+        // -------------------------------------------
+
         // CRITICAL: Calculate current active owned cells count from backend
         let activeOwnedCount = 0;
         try {
@@ -638,6 +684,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             xp: newTotalXP,
             level: newLevel,
             lastActivityDate: endDate,
+            currentStreakWeeks: newStreak, // Guardamos la racha calculada
             totalActivities: FieldValue.increment(1),
             totalCellsOwned: activeOwnedCount, // Server-side truth for "active" inventory
             totalConqueredTerritories: FieldValue.increment(conquestCount),

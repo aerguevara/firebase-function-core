@@ -130,6 +130,7 @@ export interface XPContext {
     bestWeeklyDistanceKm: number | null;
     currentStreakWeeks: number;
     todayBaseXPEarned: number;
+    lastActivityDate?: any; // Firestore Timestamp or Date
     gamificationState: GamificationState;
     userVengeanceIds?: Set<string>;
 }
