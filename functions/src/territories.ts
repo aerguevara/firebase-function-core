@@ -199,6 +199,26 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             return;
         }
 
+        const db = databaseId ? getFirestore(databaseId) : getFirestore();
+        const activityRef = db.collection("activities").doc(activityId);
+
+        // --- CONCURRENCY GUARD ---
+        // Atomic check-and-set to 'processing'
+        try {
+            await db.runTransaction(async (transaction) => {
+                const doc = await transaction.get(activityRef);
+                const status = doc.data()?.processingStatus;
+                if (status !== "pending") {
+                    throw new Error("Activity already processing or completed");
+                }
+                transaction.update(activityRef, { processingStatus: "processing" });
+            });
+        } catch (e: any) {
+            console.log(`[Abort] Activity ${activityId} is already being handled: ${e.message}`);
+            return;
+        }
+        // -------------------------
+
         const userId = afterData.userId;
         const activityData = afterData;
 
@@ -208,8 +228,6 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         }
 
         const locationLabel = activityData.locationLabel || null;
-
-        const db = databaseId ? getFirestore(databaseId) : getFirestore();
         const activityDistanceKm = (afterData.distanceMeters || 0) / 1000.0;
 
         // --- CHECK GPS PRESENCE EARLY ---
@@ -348,8 +366,9 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         // 1. Reassemble Route
         let allPoints: RoutePoint[] = [];
 
-        const chunks = routesSnapshot.docs.map((d: any) => d.data())
-            .sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+        // Fetch full routes snapshot (ignoring the 'limit(1)' preview used for hasGps)
+        const fullRoutesSnapshot = await db.collection("activities").doc(activityId).collection("routes").orderBy("order", "asc").get();
+        const chunks = fullRoutesSnapshot.docs.map((d: any) => d.data());
 
         for (const chunk of chunks) {
             if (chunk.points && Array.isArray(chunk.points)) {
@@ -951,9 +970,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                         });
                     });
                 }
-
-
-            } catch (e) {
+            } catch (e: any) {
                 console.error("Error updating rival lists:", e);
             }
         }
@@ -1017,6 +1034,6 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             timestamp: FieldValue.serverTimestamp() // For ordering
         };
 
-        await db.collection("feed").add(feedEvent);
-        console.log("Feed event created.");
+        await db.collection("feed").doc(feedEvent.id).set(feedEvent);
+        console.log("Feed event updated/created with stable ID.");
     });
