@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "SDRDXJM7RR.com.aerguevara.Adventure-Streak",
+        "paths": ["/invite/*"]
+      }
+    ]
+  }
+}

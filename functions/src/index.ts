@@ -8,6 +8,12 @@ import { BADGES } from "./badges";
 import { createOnMockWorkoutCreated } from "./debug_simulation";
 import { dailyUserSync } from "./sync";
 import { engagementHourlyJob, engagementRoutineJob } from "./engagement";
+// --- Invitations ---
+import { createGenerateInvitation, createRedeemInvitation } from "./invitations";
+export const generateInvitationCall = createGenerateInvitation();
+export const redeemInvitationCall = createRedeemInvitation();
+export const generateInvitationCallPRE = createGenerateInvitation("adventure-streak-pre");
+export const redeemInvitationCallPRE = createRedeemInvitation("adventure-streak-pre");
 
 admin.initializeApp();
 
@@ -209,3 +215,7 @@ export const hourlyEngagement = engagementHourlyJob;
 export const routineEngagement = engagementRoutineJob;
 export const hourlyEngagementPRE = engagementHourlyJob; // Using PROD logic for PRE too
 export const routineEngagementPRE = engagementRoutineJob;
+
+// --- Invitations ---
+// --- Invitations (Legacy - Use create... factories above) ---
+// Exports moved to top of file

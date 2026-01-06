@@ -210,6 +210,13 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         const locationLabel = activityData.locationLabel || null;
 
         const db = databaseId ? getFirestore(databaseId) : getFirestore();
+        const activityDistanceKm = (afterData.distanceMeters || 0) / 1000.0;
+
+        // --- CHECK GPS PRESENCE EARLY ---
+        const routesSnapshot = await db.collection("activities").doc(activityId).collection("routes").limit(1).get();
+        const hasGps = !routesSnapshot.empty;
+        // --------------------------------
+
         const xpConfig = await fetchXPConfig(db);
 
         // Ensure endDate is a Date object for calculations
@@ -255,20 +262,64 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 const userVengeanceIds = new Set(vengeanceSnapshot.docs.map(doc => doc.id));
                 // ------------------------------------
 
+                const lastActivityDate = userData.lastActivityDate || null;
+                const calendarRef = new Date(0);
+                const getWeekIndex = (date: Date) => {
+                    const diffTime = date.getTime() - calendarRef.getTime();
+                    return Math.floor(diffTime / (7 * 24 * 60 * 60 * 1000));
+                };
+
+                const currentWeekIdx = getWeekIndex(endDate);
+                let effectiveWeeklyDistance = userData.currentWeekDistanceKm || 0;
+                let effectiveWeeklyDistanceNoGps = userData.currentWeekDistanceNoGpsKm || 0;
+                let calculatedStreak = userData.currentStreakWeeks || 0;
+
+                if (lastActivityDate) {
+                    const lastDate = lastActivityDate instanceof admin.firestore.Timestamp ? lastActivityDate.toDate() : new Date(lastActivityDate);
+                    const lastWeekIdx = getWeekIndex(lastDate);
+
+                    if (currentWeekIdx > lastWeekIdx) {
+                        // New week: Reset BOTH distances for the new bucket logic
+                        effectiveWeeklyDistance = 0;
+                        effectiveWeeklyDistanceNoGps = 0;
+
+                        if (hasGps) {
+                            if (currentWeekIdx === lastWeekIdx + 1) {
+                                calculatedStreak += 1;
+                            } else {
+                                calculatedStreak = 1;
+                            }
+                        }
+                    } else {
+                        // Same week: Maintain streak if it's a GPS activity
+                        if (hasGps && calculatedStreak === 0) calculatedStreak = 1;
+                    }
+                } else {
+                    // First activity
+                    effectiveWeeklyDistance = 0;
+                    effectiveWeeklyDistanceNoGps = 0;
+                    if (hasGps) calculatedStreak = 1;
+                }
+
                 xpContext = {
                     userId,
-                    currentWeekDistanceKm: userData.currentWeekDistanceKm || 0, // Mocked/stored
+                    currentWeekDistanceKm: effectiveWeeklyDistance,
                     bestWeeklyDistanceKm: userData.bestWeeklyDistanceKm || null,
-                    currentStreakWeeks: userData.currentStreakWeeks || 0,
+                    currentStreakWeeks: calculatedStreak,
                     todayBaseXPEarned: 0, // Simplified for MVP
                     gamificationState: {
                         totalXP: userData.xp || 0,
                         level: currentUserLevel,
-                        currentStreakWeeks: userData.currentStreakWeeks || 0
+                        currentStreakWeeks: calculatedStreak
                     },
-                    lastActivityDate: userData.lastActivityDate || null, // Guardar para calculo de racha
+                    lastActivityDate: lastActivityDate,
                     userVengeanceIds // Pass the pre-fetched IDs
                 };
+
+                // Store the post-activity values for the final update
+                (xpContext as any).newWeeklyDistance = hasGps ? (effectiveWeeklyDistance + activityDistanceKm) : effectiveWeeklyDistance;
+                (xpContext as any).newWeeklyDistanceNoGps = !hasGps ? (effectiveWeeklyDistanceNoGps + activityDistanceKm) : effectiveWeeklyDistanceNoGps;
+                (xpContext as any).newStreak = calculatedStreak;
             }
         } catch (e) {
             console.log("Error fetching user profile:", e);
@@ -295,7 +346,6 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         }
 
         // 1. Reassemble Route
-        const routesSnapshot = await db.collection(`activities/${activityId}/routes`).get();
         let allPoints: RoutePoint[] = [];
 
         const chunks = routesSnapshot.docs.map((d: any) => d.data())
@@ -625,47 +675,8 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         const newLevel = GamificationService.getLevel(newTotalXP);
 
         // 5b. Update User Profile (XP, Level, Last Updated, cumulative counters)
-
-        // --- CALCULAR RACHA (currentStreakWeeks) ---
-        let newStreak = xpContext.currentStreakWeeks;
-        try {
-            const calendarRef = new Date(0); // 1970-01-01
-
-            // Función para obtener "indices de semana" consistentes con la app
-            const getWeekIndex = (date: Date) => {
-                const diffTime = date.getTime() - calendarRef.getTime();
-                return Math.floor(diffTime / (7 * 24 * 60 * 60 * 1000));
-            };
-
-            const currentWeekIdx = getWeekIndex(endDate);
-
-            const lastActivityTS = (xpContext as any).lastActivityDate;
-            if (lastActivityTS) {
-                const lastDate = lastActivityTS instanceof admin.firestore.Timestamp ? lastActivityTS.toDate() : new Date(lastActivityTS);
-                const lastWeekIdx = getWeekIndex(lastDate);
-
-                if (currentWeekIdx === lastWeekIdx + 1) {
-                    // Nueva semana: incrementamos racha
-                    newStreak += 1;
-                    console.log(`🔥 Streak incremented to ${newStreak} for user ${userId}`);
-                } else if (currentWeekIdx > lastWeekIdx + 1) {
-                    // Racha rota: reseteamos a 1
-                    newStreak = 1;
-                    console.log(`❄️ Streak reset to 1 for user ${userId} (Last week was ${lastWeekIdx}, current is ${currentWeekIdx})`);
-                } else if (currentWeekIdx === lastWeekIdx) {
-                    // Misma semana: la racha se mantiene igual (mínimo 1)
-                    if (newStreak === 0) newStreak = 1;
-                    console.log(`✨ Streak maintained at ${newStreak} for user ${userId} (same week)`);
-                }
-            } else {
-                // Primera actividad registrada: racha empieza en 1
-                newStreak = 1;
-                console.log(`🌱 Streak started at 1 for user ${userId}`);
-            }
-        } catch (e) {
-            console.error("Error calculating streak:", e);
-        }
-        // -------------------------------------------
+        const newStreak = (xpContext as any).newStreak;
+        const newWeeklyDistance = (xpContext as any).newWeeklyDistance;
 
         // CRITICAL: Calculate current active owned cells count from backend
         let activeOwnedCount = 0;
@@ -680,19 +691,29 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             console.error("Error counting active territories:", e);
         }
 
-        await db.collection("users").doc(userId).update({
+        const updateData: any = {
             xp: newTotalXP,
             level: newLevel,
             lastActivityDate: endDate,
-            currentStreakWeeks: newStreak, // Guardamos la racha calculada
+            currentStreakWeeks: newStreak,
+            currentWeekDistanceKm: newWeeklyDistance,
+            currentWeekDistanceNoGpsKm: (xpContext as any).newWeeklyDistanceNoGps,
             totalActivities: FieldValue.increment(1),
-            totalCellsOwned: activeOwnedCount, // Server-side truth for "active" inventory
+            totalCellsOwned: activeOwnedCount,
             totalConqueredTerritories: FieldValue.increment(conquestCount),
             totalStolenTerritories: FieldValue.increment(stealCount),
             totalDefendedTerritories: FieldValue.increment(defenseCount),
             totalRecapturedTerritories: FieldValue.increment(recapturedCount),
             lastUpdated: FieldValue.serverTimestamp()
-        });
+        };
+
+        if (hasGps) {
+            updateData.totalDistanceKm = FieldValue.increment(activityDistanceKm);
+        } else {
+            updateData.totalDistanceNoGpsKm = FieldValue.increment(activityDistanceKm);
+        }
+
+        await db.collection("users").doc(userId).update(updateData);
 
         // C. Update Activity (with results)
         const activityUpdate: Record<string, unknown> = {
