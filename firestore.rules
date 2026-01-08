@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- Helper Functions ---
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // --- Rules ---
+
+    // 1. Users Collection
+    // - Read: Public (Required for Web App Ranking/Leaderboard on landing page).
+    // - Write: Only the user can create/update their own document.
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if isOwner(userId);
+      
+      // Vengeance Targets (Private to the user)
+      match /vengeance_targets/{targetId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // Social connections
+      match /followers/{followerId} {
+        allow read: if isAuthenticated();
+        allow write: if isOwner(userId);
+      }
+      
+      match /following/{followingId} {
+        allow read: if isAuthenticated();
+        allow write: if isOwner(userId);
+      }
+    }
+
+    // 2. Activities Collection
+    // - Read: Authenticated users can read (social feed, checking territory history).
+    // - Create: Authenticated users can create only if they validly claim ownership.
+    // - Update/Delete: Only the owner of the existing document can modify or delete it.
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      
+      // Route Chunks (Subcollection)
+      // Inherits write permission from parent specific check
+      match /routes/{chunkId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && get(/databases/$(database)/documents/activities/$(activityId)).data.userId == request.auth.uid;
+      }
+      
+      // Territory Chunks (Subcollection)
+      match /territories/{chunkId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && get(/databases/$(database)/documents/activities/$(activityId)).data.userId == request.auth.uid;
+      }
+    }
+
+    // 3. Remote Territories (Global Map)
+    // - Read: Visible to all players.
+    // - Create/Update (Conquest): A user can overwrite a territory (Conquer it) ONLY IF 
+    //   they sign the new document with their own ID. This prevents impersonation.
+    // - Delete: Only the current owner can remove it.
+    match /remote_territories/{cellId} {
+      allow read: if true;
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 4. Game Configuration
+    // - Read: Authenticated users need to read game settings (XP, expiration, etc.).
+    // - Write: STRICTLY DENIED for clients. Only Admin SDK (Servers/Scripts) can write here.
+    match /config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // 5. Social Feed
+    // - Read: Public for players.
+    // - Write: Users can only post/edit their own feed events.
+    match /feed/{eventId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 6. Notifications
+    // - Read/Write: Users can read/write their own notifications (e.g. mark as read).
+    // - Create: Users can create notifications for others (e.g. reactions), but must identify as themselves.
+    //   (Ideally this should be server-side, but client code currently does it).
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.recipientId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.recipientId == request.auth.uid; // Only mark as read
+      allow create: if isAuthenticated(); // Allow creating (sending) notifications to others
+    }
+
+    // 7. Reactions (Individual user votes)
+    // - Read: Public.
+    // - Write: Users can only create/delete their OWN reaction.
+    match /activity_reactions/{reactionId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() 
+                           && request.resource.data.reactedUserId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.reactedUserId == request.auth.uid;
+    }
+
+    // 8. Reaction Stats (Aggregated counts)
+    // - Read: Public.
+    // - Write: Open to authenticated users (Client currently increments these).
+    //   TODO: Migrate to Cloud Functions for security.
+    match /activity_reaction_stats/{activityId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // 9. Invitations (Backend managed)
+    // - Read/Write: Denied (Client uses Callable Functions).
+    match /invitations/{inviteId} {
+      allow read, write: if false;
+    }
+  }
+}
