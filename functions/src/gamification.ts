@@ -1,28 +1,29 @@
 import { XPConfigData, XPContext, XPBreakdown, TerritoryStats } from "./xp_config";
+import { SeasonConfig } from "./seasons";
 
 export class GamificationService {
   static computeXP(
-    activity: any, // Typed as any for now, matches Activity structure
+    activity: any,
     territoryStats: TerritoryStats,
     context: XPContext,
-    config: XPConfigData
+    config: XPConfigData,
+    season: SeasonConfig | null = null
   ): XPBreakdown {
     // 1. Base XP
-    const xpBase = this.computeBaseXP(activity, context, config);
+    const xpBase = this.computeBaseXP(activity, context, config, season);
 
     // 2. Territory XP
-    const xpTerritory = this.computeTerritoryXP(territoryStats, config);
+    const xpTerritory = this.computeTerritoryXP(territoryStats, config, season);
 
     // 3. Streak Bonus
-    // Logic: If activity duration > min and it's a new week (simplified for MVP: always check context)
     const durationSeconds = activity.durationSeconds || 0;
     const maintainsStreak = durationSeconds >= config.minDurationSeconds;
-    const xpStreak = this.computeStreakBonus(context, maintainsStreak, config);
+    const xpStreak = this.computeStreakBonus(context, maintainsStreak, config, season);
 
     // 4. Weekly Record
     const distanceKm = (activity.distanceMeters || 0) / 1000.0;
     const newWeekDistance = context.currentWeekDistanceKm + distanceKm;
-    const xpWeeklyRecord = this.computeWeeklyRecordBonus(context, newWeekDistance, config);
+    const xpWeeklyRecord = this.computeWeeklyRecordBonus(context, newWeekDistance, config, season);
 
     // 5. Badges (Placeholder)
     const xpBadges = 0;
@@ -37,17 +38,22 @@ export class GamificationService {
     };
   }
 
-  private static computeBaseXP(activity: any, context: XPContext, config: XPConfigData): number {
+  private static computeBaseXP(activity: any, context: XPContext, config: XPConfigData, season: SeasonConfig | null): number {
     const distanceKm = (activity.distanceMeters || 0) / 1000.0;
     const durationSeconds = activity.durationSeconds || 0;
     const activityType = activity.activityType || "unknown";
+
+    let dailyCap = config.dailyBaseXPCap;
 
     // Indoor without distance: calculate by minutes
     if (activityType === "indoor") {
       if (durationSeconds < config.minDurationSeconds) return 0;
       const minutes = durationSeconds / 60.0;
-      const rawXP = Math.floor(minutes * config.indoorXPPerMinute);
-      const remainingCap = Math.max(0, config.dailyBaseXPCap - context.todayBaseXPEarned);
+
+      let indoorFactor = config.indoorXPPerMinute;
+
+      const rawXP = Math.floor(minutes * indoorFactor);
+      const remainingCap = Math.max(0, dailyCap - context.todayBaseXPEarned);
       return Math.min(rawXP, remainingCap);
     }
 
@@ -59,24 +65,32 @@ export class GamificationService {
     switch (activityType) {
       case "run": factor *= config.factorRun; break;
       case "bike": factor *= config.factorBike; break;
-      case "walk": factor *= config.factorWalk; break;
-      case "hike": factor *= config.factorWalk; break;
+      case "walk":
+      case "hike":
+        factor *= config.factorWalk;
+        break;
       case "otherOutdoor": factor *= config.factorOther; break;
-      case "indoor": factor *= config.factorIndoor; break;
+      case "indoor":
+        factor *= config.factorIndoor;
+        break;
     }
 
-    const rawXP = Math.floor(distanceKm * factor);
-    const remainingCap = Math.max(0, config.dailyBaseXPCap - context.todayBaseXPEarned);
+    let rawXP = Math.floor(distanceKm * factor);
+
+    const remainingCap = Math.max(0, dailyCap - context.todayBaseXPEarned);
     return Math.min(rawXP, remainingCap);
   }
 
-  private static computeTerritoryXP(stats: TerritoryStats, config: XPConfigData): number {
+  private static computeTerritoryXP(stats: TerritoryStats, config: XPConfigData, season: SeasonConfig | null): number {
     const effectiveNewCells = Math.min(stats.newCellsCount, config.maxNewCellsXPPerActivity);
 
-    const xpNew = effectiveNewCells * config.xpPerNewCell;
+    const xpNewFactor = config.xpPerNewCell;
+    const xpStealFactor = config.xpPerStolenCell;
+
+    const xpNew = effectiveNewCells * xpNewFactor;
     const xpDef = stats.defendedCellsCount * config.xpPerDefendedCell;
     const xpRec = stats.recapturedCellsCount * config.xpPerRecapturedCell;
-    const xpStolen = stats.stolenCellsCount * config.xpPerStolenCell;
+    const xpStolen = stats.stolenCellsCount * xpStealFactor;
     const xpVengeance = (stats.vengeanceCellsCount || 0) * config.vengeanceXPReward;
     const xpLastMinute = (stats.lastMinuteDefenseCount || 0) * config.lastMinuteDefenseBonus;
 
@@ -97,12 +111,13 @@ export class GamificationService {
     return xpNew + xpDef + xpRec + xpStolen + xpVengeance + xpLastMinute + xpLoot + xpConsolidation + xpStreakInterruption;
   }
 
-  private static computeStreakBonus(context: XPContext, maintainsStreak: boolean, config: XPConfigData): number {
+  private static computeStreakBonus(context: XPContext, maintainsStreak: boolean, config: XPConfigData, season: SeasonConfig | null): number {
     if (!maintainsStreak) return 0;
-    return config.baseStreakXPPerWeek * context.currentStreakWeeks;
+    const factor = config.baseStreakXPPerWeek;
+    return factor * context.currentStreakWeeks;
   }
 
-  private static computeWeeklyRecordBonus(context: XPContext, newWeekDistanceKm: number, config: XPConfigData): number {
+  private static computeWeeklyRecordBonus(context: XPContext, newWeekDistanceKm: number, config: XPConfigData, season: SeasonConfig | null): number {
     const best = context.bestWeeklyDistanceKm;
     if (!best || best < config.minWeeklyRecordKm) {
       return 0;
@@ -110,7 +125,8 @@ export class GamificationService {
 
     if (newWeekDistanceKm > best) {
       const diff = newWeekDistanceKm - best;
-      return Math.floor(config.weeklyRecordBaseXP + (diff * config.weeklyRecordPerKmDiffXP));
+      const perKmFactor = config.weeklyRecordPerKmDiffXP;
+      return Math.floor(config.weeklyRecordBaseXP + (diff * perKmFactor));
     }
     return 0;
   }

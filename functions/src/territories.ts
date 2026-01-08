@@ -7,6 +7,7 @@ import { GamificationService } from "./gamification";
 
 import { MissionEngine } from "./missions";
 import { BadgeService } from "./badges";
+import { SeasonManager } from "./seasons";
 import * as geofire from "geofire-common";
 
 // Grid configuration matching TerritoryGrid.swift
@@ -281,9 +282,10 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
                 // ------------------------------------
 
                 const lastActivityDate = userData.lastActivityDate || null;
-                const calendarRef = new Date(0);
+                const calendarRef = new Date("2025-12-29T00:00:00Z"); // Lunes previo al inicio de 2026
                 const getWeekIndex = (date: Date) => {
                     const diffTime = date.getTime() - calendarRef.getTime();
+                    if (diffTime < 0) return -1; // Activities before the reference week
                     return Math.floor(diffTime / (7 * 24 * 60 * 60 * 1000));
                 };
 
@@ -671,8 +673,9 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         }
         // -----------------------------------------------------
 
-        const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig);
-        const missions = MissionEngine.classifyMissions(activityData, territoryStats, xpContext, xpConfig);
+        const currentSeason = SeasonManager.getCurrentSeason(endDate);
+        const xpBreakdown = GamificationService.computeXP(activityData, territoryStats, xpContext, xpConfig, currentSeason);
+        const missions = MissionEngine.classifyMissions(activityData, territoryStats, xpContext, xpConfig, currentSeason);
 
         let victimNames: string[] = [];
         if (victimSteals.size > 0) {
@@ -725,6 +728,11 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             totalRecapturedTerritories: FieldValue.increment(recapturedCount),
             lastUpdated: FieldValue.serverTimestamp()
         };
+
+        const oldBest = (xpContext as any).bestWeeklyDistanceKm || 0;
+        if (newWeeklyDistance > oldBest) {
+            updateData.bestWeeklyDistanceKm = newWeeklyDistance;
+        }
 
         if (hasGps) {
             updateData.totalDistanceKm = FieldValue.increment(activityDistanceKm);

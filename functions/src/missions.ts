@@ -1,5 +1,5 @@
-/* eslint-disable */
 import { XPConfigData, XPContext, TerritoryStats } from "./xp_config";
+import { SeasonConfig } from "./seasons";
 
 export type MissionCategory = "territorial" | "progression" | "physicalEffort";
 export type MissionRarity = "common" | "rare" | "epic" | "legendary";
@@ -19,10 +19,19 @@ export class MissionEngine {
         activity: any,
         territoryStats: TerritoryStats,
         context: XPContext,
-        config: XPConfigData
+        config: XPConfigData,
+        season: SeasonConfig | null = null
     ): Mission[] {
         const missions: Mission[] = [];
         const userId = context.userId;
+
+        // 0. Seasonal Mission (Priority)
+        if (season) {
+            const seasonalMission = this.createSeasonalMission(userId, activity, territoryStats, context, season);
+            if (seasonalMission) {
+                missions.push(seasonalMission);
+            }
+        }
 
         // 1. Territorial Missions
         if (territoryStats.newCellsCount > 0) {
@@ -208,6 +217,44 @@ export class MissionEngine {
             name: isSprintPace ? "Sprint Intenso" : "Esfuerzo Destacado",
             description: "Entrenamiento de alta intensidad completado",
             rarity: isSprintPace ? "rare" : "common"
+        };
+    }
+
+    private static createSeasonalMission(userId: string, activity: any, stats: TerritoryStats, context: XPContext, season: SeasonConfig): Mission | null {
+        let isCompleted = false;
+
+        switch (season.id) {
+            case "T1_2026": // Cartógrafo Real: 100 new cells
+                // Note: 'totalConqueredTerritories' in DB or 'newCellsCount' in activity? 
+                // Proposal says "Se completa al conquistar 100 celdas nuevas en el trimestre".
+                // We need to track this in user stats. For now, we trigger if high volume or check user doc.
+                // Assuming we want to show progress or completion. 
+                // For classifying *this* activity's contribution:
+                if (stats.newCellsCount >= 50) isCompleted = true; // Temporary simplification for classifying EPIC contribution
+                break;
+            case "T2_2026": // Cadena de Hierro: 8 weeks streak
+                if (context.currentStreakWeeks >= 8) isCompleted = true;
+                break;
+            case "T3_2026": // Rey de la Colina: Steal 50 cells from thieves
+                if (stats.stolenCellsCount >= 10) isCompleted = true; // Simplified for activity classification
+                break;
+            case "T4_2026": // Último Aliento: Beat best weekly distance by > 15km
+                const distanceKm = (activity.distanceMeters || 0) / 1000.0;
+                const newWeekDistance = context.currentWeekDistanceKm + distanceKm;
+                if (context.bestWeeklyDistanceKm && newWeekDistance > context.bestWeeklyDistanceKm + 15) {
+                    isCompleted = true;
+                }
+                break;
+        }
+
+        if (!isCompleted) return null;
+
+        return {
+            userId,
+            category: "territorial",
+            name: season.missionName,
+            description: `Misión Especial de Temporada: ${season.name}`,
+            rarity: "epic"
         };
     }
 

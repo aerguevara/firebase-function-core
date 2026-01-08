@@ -2,7 +2,7 @@ import * as admin from "firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { XPContext, TerritoryStats } from "./xp_config";
 
-export type BadgeCategory = "aggressive" | "social" | "training";
+export type BadgeCategory = "aggressive" | "social" | "training" | "progressive";
 
 export interface BadgeDefinition {
     id: string;
@@ -25,6 +25,12 @@ export const BADGES: BadgeDefinition[] = [
     { id: "uninvited", category: "aggressive", name: "Sin Invitación", description: "Robar un territorio en una actividad de >10km", icon: "🚪" },
     { id: "streak_breaker", category: "aggressive", name: "Interrupción de Racha", description: "Robar a un usuario con racha > 4 semanas", icon: "💔" },
     { id: "white_glove", category: "aggressive", name: "Ladrón de Guante Blanco", description: "Robar una celda épica (>30 días)", icon: "🧤" },
+
+    // --- Seasonal 2026 ---
+    { id: "winter_pioneer", category: "progressive", name: "Pionero del Invierno", description: "Completar la misión 'Cartógrafo Real' (Temporada 1)", icon: "❄️" },
+    { id: "spring_streak", category: "progressive", name: "Racha de Primavera", description: "Completar la misión 'Cadena de Hierro' (Temporada 2)", icon: "🌿" },
+    { id: "summer_conqueror", category: "progressive", name: "Conquistador de Verano", description: "Completar la misión 'Rey de la Colina' (Temporada 3)", icon: "☀️" },
+    { id: "year_end_hero", category: "progressive", name: "Héroe del Fin de Año", description: "Completar la misión 'Último Aliento' (Temporada 4)", icon: "🏆" },
     // "relentless_occupier" omitted (complex history)
     // "hostile_expansion" omitted (complex history)
     // "rival_scourge" omitted (complex history)

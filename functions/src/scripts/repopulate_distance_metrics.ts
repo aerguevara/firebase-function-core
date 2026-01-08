@@ -11,9 +11,10 @@ import * as fs from 'fs';
  * 4. Update currentWeekDistanceKm and currentWeekDistanceNoGpsKm based on "now".
  */
 
-const calendarRef = new Date(0);
+const calendarRef = new Date("2025-12-29T00:00:00Z");
 const getWeekIndex = (date: Date) => {
     const diffTime = date.getTime() - calendarRef.getTime();
+    if (diffTime < 0) return -1;
     return Math.floor(diffTime / (7 * 24 * 60 * 60 * 1000));
 };
 
