@@ -1,0 +1,292 @@
+🔍 Analizando usuario: CVZ34x99UuU6fCrOEc8Wg5nPYX82
+
+👤 --- DATOS DEL USUARIO ---
+{
+  "needsTokenRefresh": false,
+  "displayName": "Anyelo Reyes",
+  "email": "aerguevara@gmail.com",
+  "avatarURL": "https://firebasestorage.googleapis.com:443/v0/b/adventure-streak.firebasestorage.app/o/users%2FCVZ34x99UuU6fCrOEc8Wg5nPYX82%2Favatar.jpg?alt=media&token=7e3bf59e-8ae9-4225-b3f7-2f231df5b3f9",
+  "migrationVersion": 2,
+  "lastMigrationAt": {
+    "_seconds": 1766695328,
+    "_nanoseconds": 324000000
+  },
+  "mapIcon": "🔥",
+  "prestige": 0,
+  "hasAcknowledgedDecReset": true,
+  "lastRepopulated": {
+    "_seconds": 1767639175,
+    "_nanoseconds": 563000000
+  },
+  "invitationVerified": true,
+  "invitationCount": 0,
+  "invitationQuota": 15,
+  "badges": [
+    "takeover"
+  ],
+  "lastAcknowledgeSeasonId": "T1_2026",
+  "lastLogin": {
+    "_seconds": 1767893580,
+    "_nanoseconds": 874000000
+  },
+  "joinedAt": {
+    "_seconds": 1767893580,
+    "_nanoseconds": 874000000
+  },
+  "fcmTokens": "eVhAs-s_gE_VhcKNd2Obwq:APA91bF7W_NwbkzvEhwmyFgG7I5gAMTwp1g2dhnaIxqcGnwvtDCaz8YFI0i5RfOGcl0HGh4MaWsfo-ffElxSXLHcw6CzZDzjaSppL1Pr31IThtg2JIX_Fdc",
+  "fcmTokenUpdatedAt": {
+    "_seconds": 1767894615,
+    "_nanoseconds": 333000000
+  },
+  "seasonHistory": {
+    "T1_2026": {
+      "prestigeEarned": 0,
+      "finalXp": 3794,
+      "id": "T1_2026",
+      "finalCells": 237,
+      "seasonId": "T1_2026",
+      "seasonName": "Temporada 1",
+      "completedAt": {
+        "_seconds": 1767913120,
+        "_nanoseconds": 383000000
+      }
+    }
+  },
+  "recentTerritories": 0,
+  "lastSeasonReset": {
+    "_seconds": 1767913120,
+    "_nanoseconds": 383000000
+  },
+  "totalRecapturedTerritories": 0,
+  "totalStolenTerritories": 0,
+  "totalDistanceNoGpsKm": 1.016712467361614,
+  "currentStreakWeeks": 2,
+  "currentWeekDistanceNoGpsKm": 0,
+  "level": 2,
+  "totalConqueredTerritories": 52,
+  "recentThieves": [
+    {
+      "displayName": "Albanys Cuberos Raga",
+      "count": 18,
+      "avatarURL": "https://firebasestorage.googleapis.com:443/v0/b/adventure-streak.firebasestorage.app/o/users%2FJaSFY1oPRUfJmuIgFf1LUzl6yOp2%2Favatar.jpg?alt=media&token=563069c5-8edd-439f-96ba-e226787a721a",
+      "lastInteractionAt": {
+        "_seconds": 1767879913,
+        "_nanoseconds": 840000000
+      },
+      "userId": "JaSFY1oPRUfJmuIgFf1LUzl6yOp2"
+    }
+  ],
+  "totalCellsOwned": 38,
+  "lastAcknowledgedResetAt": {
+    "_seconds": 1767913120,
+    "_nanoseconds": 382999000
+  },
+  "lastUpdated": {
+    "_seconds": 1768058577,
+    "_nanoseconds": 196000000
+  },
+  "bestWeeklyDistanceKm": 12.224838373692357,
+  "currentWeekDistanceKm": 12.224838373692357,
+  "totalDefendedTerritories": 48,
+  "lastActivityDate": {
+    "_seconds": 1768058501,
+    "_nanoseconds": 104000000
+  },
+  "xp": 1828,
+  "totalDistanceKm": 18.545135095414413,
+  "totalActivities": 15,
+  "recentTheftVictims": [
+    {
+      "userId": "JaSFY1oPRUfJmuIgFf1LUzl6yOp2",
+      "displayName": "Albanys Cuberos Raga",
+      "avatarURL": "https://firebasestorage.googleapis.com:443/v0/b/adventure-streak.firebasestorage.app/o/users%2FJaSFY1oPRUfJmuIgFf1LUzl6yOp2%2Favatar.jpg?alt=media&token=563069c5-8edd-439f-96ba-e226787a721a",
+      "lastInteractionAt": {
+        "_seconds": 1768058501,
+        "_nanoseconds": 104000000
+      },
+      "count": 6
+    }
+  ]
+}
+
+🏃 Buscando la última actividad (ordenando en local)...
+
+📋 --- DATOS DE LA ACTIVIDAD ---
+ID: A09BB1FD-C143-44EF-8C1C-B9BE9B23ECD5
+{
+  "distanceMeters": 567.0982019267976,
+  "routePointsCount": 549,
+  "durationSeconds": 553.4317770004272,
+  "endDate": {
+    "_seconds": 1768058501,
+    "_nanoseconds": 104011000
+  },
+  "lastUpdatedAt": {
+    "_seconds": 1768058570,
+    "_nanoseconds": 644000000
+  },
+  "workoutName": null,
+  "userId": "CVZ34x99UuU6fCrOEc8Wg5nPYX82",
+  "routeChunkCount": 2,
+  "activityType": "walk",
+  "startDate": {
+    "_seconds": 1768057947,
+    "_nanoseconds": 672234000
+  },
+  "locationLabel": "Caminar",
+  "territoryChunkCount": 1,
+  "territoryPointsCount": 3,
+  "processingStatus": "completed",
+  "territoryStats": {
+    "newCellsCount": 0,
+    "defendedCellsCount": 1,
+    "recapturedCellsCount": 0,
+    "stolenCellsCount": 0,
+    "vengeanceCellsCount": 2,
+    "lastMinuteDefenseCount": 0,
+    "totalLootXP": 12,
+    "totalConsolidationXP": 0,
+    "totalStreakInterruptionXP": 30
+  },
+  "missions": [
+    {
+      "userId": "CVZ34x99UuU6fCrOEc8Wg5nPYX82",
+      "category": "progression",
+      "name": "Racha Activa",
+      "description": "Semana #2 de tu racha",
+      "rarity": "rare"
+    },
+    {
+      "userId": "CVZ34x99UuU6fCrOEc8Wg5nPYX82",
+      "category": "progression",
+      "name": "Nuevo Récord Semanal",
+      "description": "¡12.2 km esta semana! Superaste tu récord",
+      "rarity": "epic"
+    }
+  ],
+  "xpBreakdown": {
+    "xpBase": 5,
+    "xpTerritory": 95,
+    "xpStreak": 20,
+    "xpWeeklyRecord": 32,
+    "xpBadges": 0,
+    "total": 152
+  },
+  "conqueredVictims": [
+    "Albanys Cuberos Raga"
+  ]
+}
+
+📍 Buscando puntos de la ruta...
+
+🛣️ --- PUNTOS DE LA RUTA ---
+Total de puntos encontrados: 549
+Primeros 10 puntos:
+[
+  {
+    "latitude": 40.38463400495093,
+    "longitude": -3.6721289417135976,
+    "timestamp": "2026-01-10T15:12:32.034Z"
+  },
+  {
+    "latitude": 40.38462558480008,
+    "longitude": -3.672112660540445,
+    "timestamp": "2026-01-10T15:12:33.398Z"
+  },
+  {
+    "latitude": 40.38461938962179,
+    "longitude": -3.6721007185177292,
+    "timestamp": "2026-01-10T15:12:34.398Z"
+  },
+  {
+    "latitude": 40.38461354435672,
+    "longitude": -3.6720884510313065,
+    "timestamp": "2026-01-10T15:12:35.398Z"
+  },
+  {
+    "latitude": 40.38460873635857,
+    "longitude": -3.6720754372726074,
+    "timestamp": "2026-01-10T15:12:36.398Z"
+  },
+  {
+    "latitude": 40.38460459613306,
+    "longitude": -3.672061731107798,
+    "timestamp": "2026-01-10T15:12:37.398Z"
+  },
+  {
+    "latitude": 40.38459971423104,
+    "longitude": -3.6720476617664537,
+    "timestamp": "2026-01-10T15:12:38.398Z"
+  },
+  {
+    "latitude": 40.38459333914982,
+    "longitude": -3.672033748699991,
+    "timestamp": "2026-01-10T15:12:39.398Z"
+  },
+  {
+    "latitude": 40.3845858663804,
+    "longitude": -3.6720202010676872,
+    "timestamp": "2026-01-10T15:12:40.398Z"
+  },
+  {
+    "latitude": 40.38457806573482,
+    "longitude": -3.6720068009229863,
+    "timestamp": "2026-01-10T15:12:41.398Z"
+  }
+]
+...
+Últimos 10 puntos:
+[
+  {
+    "latitude": 40.38453615604178,
+    "longitude": -3.6720662322376785,
+    "timestamp": "2026-01-10T15:21:32.000Z"
+  },
+  {
+    "latitude": 40.38454738229752,
+    "longitude": -3.6720729702784394,
+    "timestamp": "2026-01-10T15:21:33.000Z"
+  },
+  {
+    "latitude": 40.384558590697665,
+    "longitude": -3.67207986220764,
+    "timestamp": "2026-01-10T15:21:34.000Z"
+  },
+  {
+    "latitude": 40.384569762193316,
+    "longitude": -3.6720868690901884,
+    "timestamp": "2026-01-10T15:21:35.000Z"
+  },
+  {
+    "latitude": 40.38458089442388,
+    "longitude": -3.672093968754718,
+    "timestamp": "2026-01-10T15:21:36.000Z"
+  },
+  {
+    "latitude": 40.38459199451409,
+    "longitude": -3.6721011504136998,
+    "timestamp": "2026-01-10T15:21:37.000Z"
+  },
+  {
+    "latitude": 40.38460307769185,
+    "longitude": -3.672108413739684,
+    "timestamp": "2026-01-10T15:21:38.000Z"
+  },
+  {
+    "latitude": 40.38461416676619,
+    "longitude": -3.6721157687484505,
+    "timestamp": "2026-01-10T15:21:39.000Z"
+  },
+  {
+    "latitude": 40.384625276329714,
+    "longitude": -3.672123226278721,
+    "timestamp": "2026-01-10T15:21:40.000Z"
+  },
+  {
+    "latitude": 40.38463639402173,
+    "longitude": -3.6721307867455093,
+    "timestamp": "2026-01-10T15:21:41.000Z"
+  }
+]
+
+✅ Análisis completado.

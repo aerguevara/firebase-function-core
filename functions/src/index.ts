@@ -1,5 +1,5 @@
 /* eslint-disable */
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import { createProcessActivityComplete } from "./territories";
@@ -8,14 +8,21 @@ import { BADGES } from "./badges";
 import { createOnMockWorkoutCreated } from "./debug_simulation";
 import { dailyUserSync } from "./sync";
 import { engagementHourlyJob, engagementRoutineJob } from "./engagement";
-// --- Invitations ---
+import { checkRankingChange } from "./ranking";
+
+// --- Invitations & User Management ---
 import { createGenerateInvitation, createRedeemInvitation } from "./invitations";
+import { createDeleteAccount } from "./user_management";
 export const generateInvitationCall = createGenerateInvitation();
 export const redeemInvitationCall = createRedeemInvitation();
+export const deleteAccount = createDeleteAccount();
 export const generateInvitationCallPRE = createGenerateInvitation("adventure-streak-pre");
 export const redeemInvitationCallPRE = createRedeemInvitation("adventure-streak-pre");
+export const deleteAccountPRE = createDeleteAccount("adventure-streak-pre");
 
-admin.initializeApp();
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
 
 /**
  * Triggers when a new document is created in the 'notifications' collection.
@@ -54,33 +61,62 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
         return;
       }
 
-      const userRef = db.collection("users").doc(recipientId);
-      const userDoc = await userRef.get();
+      let tokens: string[] = [];
 
-      if (!userDoc.exists) {
-        console.log(`User document for ${recipientId} does not exist.`);
-        return;
+      if (recipientId === "all") {
+        // BROADCAST LOGIC: Fetch all users with FCM tokens
+        console.log(`[Notification] Broadcasting ${data.type} to all users...`);
+        const usersWithTokens = await db.collection("users")
+          .where("fcmTokens", "!=", null)
+          .get();
+
+        usersWithTokens.docs.forEach(doc => {
+          const uData = doc.data();
+          if (uData.fcmTokens) {
+            const userTokens = Array.isArray(uData.fcmTokens) ? uData.fcmTokens : [uData.fcmTokens];
+            tokens = tokens.concat(userTokens);
+          }
+        });
+      } else {
+        const userRef = db.collection("users").doc(recipientId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+          console.log(`User document for ${recipientId} does not exist.`);
+          return;
+        }
+
+        const userData = userDoc.data();
+        const fcmToken = userData?.fcmTokens;
+
+        if (!fcmToken) {
+          console.log(`No FCM token found for user ${recipientId}.`);
+          return;
+        }
+
+        tokens = Array.isArray(fcmToken) ? fcmToken : [fcmToken];
       }
-
-      const userData = userDoc.data();
-      const fcmToken = userData?.fcmTokens;
-
-      if (!fcmToken) {
-        console.log(`No FCM token found for user ${recipientId}.`);
-        return;
-      }
-
-      const tokens = Array.isArray(fcmToken) ? fcmToken : [fcmToken];
 
       if (tokens.length === 0) {
-        console.log(`FCM token list is empty for user ${recipientId}.`);
+        console.log(`No FCM tokens found for delivery.`);
         return;
       }
+
+      // De-duplicate tokens
+      tokens = [...new Set(tokens)];
 
       let title = "Adventure Streak";
       let body = "¡Tienes una nueva alerta!";
 
       switch (data.type) {
+        case "ranking_changed":
+          title = "¡Nuevo Líder en el Ranking! 🥇";
+          body = `¡El trono ha cambiado! ${data.senderName} es ahora el número 1 del ranking mundial.`;
+          break;
+        case "ranking_lost_first_place":
+          title = "¡Has perdido el liderato! 📉";
+          body = `¡${data.senderName} te ha superado y ahora ocupa la primera posición!`;
+          break;
         case "reaction": {
           title = "¡Nueva reacción! 🔥";
           const reactionEmojis: Record<string, string> = {
@@ -161,61 +197,76 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
           body = data.message || "Has tenido una semana increíble. ¡Mira tus estadísticas!";
           break;
         case "workout_import":
-          // Legacy or handled elsewhere if needed, but not triggered from territories.ts anymore
           title = "Entrenamiento Procesado 🏃";
           body = "Tu entrenamiento ha sido analizado y los territorios actualizados.";
           break;
       }
 
-      const message: admin.messaging.MulticastMessage = {
-        notification: {
-          title,
-          body,
-        },
-        data: {
-          notificationId: snapshot.id,
-          type: data.type || "unknown",
-        },
-        apns: {
-          payload: {
-            aps: {
-              sound: "default",
-            },
-          },
-        },
-        android: {
-          notification: {
-            sound: "default",
-          },
-        },
-        tokens,
-      };
+      // Limit multicast to 500 tokens at a time (FCM limit)
+      const chunk = (arr: any[], size: number) => arr.reduce((acc, _, i) => (i % size) ? acc : [...acc, arr.slice(i, i + size)], []);
+      const tokenChunks = chunk(tokens, 500);
 
-      const response = await admin.messaging().sendEachForMulticast(message);
-      const successCount = response.successCount;
-      const failureCount = response.failureCount;
-      console.log(`${successCount} messages sent; ${failureCount} failed.`);
+      for (const tokenChunk of tokenChunks) {
+        const message: admin.messaging.MulticastMessage = {
+          notification: { title, body },
+          data: {
+            notificationId: snapshot.id,
+            type: data.type || "unknown",
+          },
+          apns: { payload: { aps: { sound: "default" } } },
+          android: { notification: { sound: "default" } },
+          tokens: tokenChunk,
+        };
+        await admin.messaging().sendEachForMulticast(message);
+      }
+
+      console.log(`Notification sent to ${tokens.length} tokens.`);
     } catch (error) {
       console.error("Error sending push notification:", error);
     }
+  });
+
+/**
+ * Triggers when a user document is updated.
+ * Used to detect ranking changes.
+ */
+export const createOnUserUpdated = (databaseId: string | undefined = undefined) =>
+  onDocumentUpdated({
+    document: "users/{userId}",
+    database: databaseId
+  }, async (event) => {
+    const change = event.data;
+    if (!change) return;
+
+    const beforeData = change.before.data();
+    const afterData = change.after.data();
+
+    if (!afterData) return;
+
+    // Trigger only if level or xp changed
+    if (beforeData?.level === afterData.level && beforeData?.xp === afterData.xp) {
+      return;
+    }
+
+    const db = databaseId ? getFirestore(databaseId) : getFirestore();
+    await checkRankingChange(db, event.params.userId, afterData);
   });
 
 // --- PROD ENV (Default Database) ---
 export const onNotificationCreated = createOnNotificationCreated();
 export const processActivityComplete = createProcessActivityComplete();
 export const onReactionCreated = createOnReactionCreated();
+export const onUserUpdated = createOnUserUpdated();
 
 // --- PRE ENV (adventure-streak-pre Database) ---
 export const onNotificationCreatedPRE = createOnNotificationCreated("adventure-streak-pre");
 export const processActivityCompletePRE = createProcessActivityComplete("adventure-streak-pre");
 export const onReactionCreatedPRE = createOnReactionCreated("adventure-streak-pre");
+export const onUserUpdatedPRE = createOnUserUpdated("adventure-streak-pre");
 export const onMockWorkoutCreatedPRE = createOnMockWorkoutCreated("adventure-streak-pre");
+
 export const scheduledDailySync = dailyUserSync;
 export const hourlyEngagement = engagementHourlyJob;
 export const routineEngagement = engagementRoutineJob;
-export const hourlyEngagementPRE = engagementHourlyJob; // Using PROD logic for PRE too
+export const hourlyEngagementPRE = engagementHourlyJob;
 export const routineEngagementPRE = engagementRoutineJob;
-
-// --- Invitations ---
-// --- Invitations (Legacy - Use create... factories above) ---
-// Exports moved to top of file

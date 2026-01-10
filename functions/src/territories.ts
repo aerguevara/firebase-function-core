@@ -12,6 +12,7 @@ import * as geofire from "geofire-common";
 
 // Grid configuration matching TerritoryGrid.swift
 const CELL_SIZE_DEGREES = 0.002;
+const MAX_INTERPOLATION_DISTANCE_METERS = 300; // Skip interpolation if jump > 300m (Signal loss or vehicle)
 
 interface RoutePoint {
     latitude: number;
@@ -97,6 +98,23 @@ function getCellsBetween(start: RoutePoint, end: RoutePoint, now: Date, userId: 
         cells.set(id, createCell(x, y, now, userId, activityId, expirationDays, locationLabel));
         return cells;
     }
+
+    // --- SAFETY GUARD: Prevent ghost territories during major GPS jumps ---
+    if (dist > MAX_INTERPOLATION_DISTANCE_METERS) {
+        console.log(`[GPS] Jump of ${dist.toFixed(0)}m detected (> ${MAX_INTERPOLATION_DISTANCE_METERS}m). Skipping interpolation for this segment.`);
+        // Just return the endpoints to avoid "teleporting" through intermediate territories
+        const startIdx = getCellIndex(start.latitude, start.longitude);
+        const endIdx = getCellIndex(end.latitude, end.longitude);
+
+        const sId = getCellId(startIdx.x, startIdx.y);
+        const eId = getCellId(endIdx.x, endIdx.y);
+
+        cells.set(sId, createCell(startIdx.x, startIdx.y, now, userId, activityId, expirationDays, locationLabel));
+        cells.set(eId, createCell(endIdx.x, endIdx.y, now, userId, activityId, expirationDays, locationLabel));
+
+        return cells;
+    }
+    // ----------------------------------------------------------------------
 
     const stepSize = 20.0; // 20 meters
     const steps = Math.ceil(dist / stepSize);
@@ -723,7 +741,7 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             totalActivities: FieldValue.increment(1),
             totalCellsOwned: activeOwnedCount,
             totalConqueredTerritories: FieldValue.increment(conquestCount),
-            totalStolenTerritories: FieldValue.increment(stealCount),
+            totalStolenTerritories: FieldValue.increment(stealCount + vengeanceCount),
             totalDefendedTerritories: FieldValue.increment(defenseCount),
             totalRecapturedTerritories: FieldValue.increment(recapturedCount),
             lastUpdated: FieldValue.serverTimestamp()
@@ -999,7 +1017,9 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
         if (conquestCount > 0) territoryHighlights.push(`${conquestCount} territorios conquistados`);
         if (defenseCount > 0) territoryHighlights.push(`${defenseCount} territorios defendidos`);
         if (recapturedCount > 0) territoryHighlights.push(`${recapturedCount} territorios recuperados`);
-        if (stealCount > 0) territoryHighlights.push(`${stealCount} territorios robados`);
+
+        const combinedSteals = stealCount + vengeanceCount;
+        if (combinedSteals > 0) territoryHighlights.push(`${combinedSteals} territorios robados`);
 
         const subtitles = [];
         if (missionNames) subtitles.push(`Misiones: ${missionNames}`);
@@ -1014,7 +1034,8 @@ export const createProcessActivityComplete = (databaseId: string | undefined = u
             newZonesCount: conquestCount,
             defendedZonesCount: defenseCount,
             recapturedZonesCount: recapturedCount,
-            stolenZonesCount: stealCount,
+            stolenZonesCount: stealCount + vengeanceCount,
+            vengeanceZonesCount: vengeanceCount,
             calories: activityData.calories || 0,
             averageHeartRate: activityData.averageHeartRate || 0,
             locationLabel: locationLabel

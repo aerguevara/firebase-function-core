@@ -63,7 +63,7 @@ describe("GamificationService - Legacy XP Logic", () => {
             activityType: "indoor"
         };
         const breakdown = GamificationService.computeXP(activity, emptyStats, baseContext, mockConfig);
-        expect(breakdown.xpBase).toBe(180); // 60 * 3
+        expect(breakdown.xpBase).toBe(90); // 60 * 1.5
     });
 
     test("XP Territory: New, Stolen, Defended, Recaptured", () => {

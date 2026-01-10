@@ -70,8 +70,8 @@ export const defaultXPConfig: XPConfigData = {
     factorBike: 0.7,
     factorWalk: 0.9,
     factorOther: 1.0,
-    factorIndoor: 0.5,
-    indoorXPPerMinute: 3.0,
+    factorIndoor: 0.25,
+    indoorXPPerMinute: 1.5,
 
     dailyBaseXPCap: 300,
 

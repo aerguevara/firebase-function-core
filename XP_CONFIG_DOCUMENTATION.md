@@ -20,7 +20,7 @@ El XP base se calcula como: `Distancia * baseFactorPerKm * Multiplicador`.
 | **Ciclismo (Bike)** | 0.7 |
 | **Caminata (Walk/Hike)** | 0.9 |
 | **Otros (Other/Outdoor)** | 1.0 |
-| **Indoor** | 0.5 |
+| **Indoor** | 0.25 |
 
 ---
 

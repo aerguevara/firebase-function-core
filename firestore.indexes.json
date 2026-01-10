@@ -55,6 +55,20 @@
                     "order": "DESCENDING"
                 }
             ]
+        },
+        {
+            "collectionGroup": "remote_territories",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "geohash",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "expiresAt",
+                    "order": "ASCENDING"
+                }
+            ]
         }
     ],
     "fieldOverrides": []
