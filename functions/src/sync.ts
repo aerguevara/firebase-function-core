@@ -16,7 +16,6 @@ const DEST_DATABASE = "adventure-streak-pre";
 const ADMIN_UID = "CVZ34x99UuU6fCrOEc8Wg5nPYX82";
 const CROSSOVER_DEST_UID = "DQN1tyypsEZouksWzmFeSIYip7b2";
 const CONCURRENCY_LIMIT = 50;
-const BATCH_SIZE = 500;
 
 export const dailyUserSync = onSchedule("0 0 * * *", async (event) => {
     console.log("🚀 Starting daily PROD -> PRE synchronization...");
@@ -29,26 +28,21 @@ export const dailyUserSync = onSchedule("0 0 * * *", async (event) => {
         console.log("🔧 Enabling Silent Mode in PRE...");
         await dbPre.collection("config").doc("maintenance").set({ silentMode: true }, { merge: true });
 
-        const collectionsToSync = [
-            "activities", "activity_reaction_stats", "activity_reactions",
-            "config", "debug_mock_workouts", "feed", "notifications",
-            "remote_territories", "reserved_icons", "users",
-            "activities_archive", "feed_archive", "notifications_archive",
-            "activity_reactions_archive", "remote_territories_archive"
-        ];
+        const collections = await dbProd.listCollections();
 
         // 2. Clear PRE collections before sync (Nuclear Reset)
         console.log("🧹 Clearing collections in PRE environment...");
-        for (const colName of collectionsToSync) {
-            console.log(`   Cleaning collection: ${colName}...`);
-            await dbPre.recursiveDelete(dbPre.collection(colName));
+        for (const colRef of collections) {
+            console.log(`   Cleaning collection: ${colRef.id}...`);
+            await dbPre.recursiveDelete(colRef);
         }
 
         // 3. Sync collections from PROD to PRE in parallel
         console.log("📦 Starting parallel synchronization from PROD...");
-        for (const colName of collectionsToSync) {
+        for (const colRef of collections) {
+            const colName = colRef.id;
             console.log(`   Syncing ${colName}...`);
-            const snapshot = await dbProd.collection(colName).get();
+            const snapshot = await colRef.get();
 
             if (snapshot.empty) continue;
 
@@ -62,9 +56,7 @@ export const dailyUserSync = onSchedule("0 0 * * *", async (event) => {
     } catch (error) {
         console.error("❌ Daily Sync failed:", error);
     } finally {
-        // Ensure Silent Mode is disabled unless it was explicitly requested to stay on
-        // Actually, for daily sync, we should probably restore it or just turn it off
-        // The user emphasized its importance during the sync.
+        // Ensure Silent Mode is disabled
         console.log("🔧 Disabling Silent Mode in PRE...");
         await dbPre.collection("config").doc("maintenance").set({ silentMode: false }, { merge: true });
     }
@@ -90,33 +82,27 @@ async function copyDocRecursive(doc: admin.firestore.QueryDocumentSnapshot | adm
         }
     }
 
-    // Special handling for crossover user if needed (mirroring stats from Admin to Simulator user)
-    // Note: In a full sync, DQN... might already exist in PROD or be created.
-    // The previous logic had specific crossover logic. Keeping it for compatibility.
-    let targetPath = doc.ref.path;
+    // Special handling for crossover user
     let targetData = { ...data };
 
     if (doc.ref.path === `users/${ADMIN_UID}`) {
-        // We sync Admin to Admin, and ALSO Admin to Simulator User (crossover)
         await targetDb.doc(`users/${CROSSOVER_DEST_UID}`).set(targetData, { merge: true });
     }
 
-    await targetDb.doc(targetPath).set(targetData);
+    await targetDb.doc(doc.ref.path).set(targetData);
 
-    // Copy subcollections
+    // List all sub-collections
     const subCollections = await doc.ref.listCollections();
+
+    // Copy subcollections recursively
     await runInParallel(subCollections, async (subCol) => {
         const subSnapshot = await subCol.get();
         if (subSnapshot.empty) return;
 
-        const chunks = chunk(subSnapshot.docs, BATCH_SIZE);
-        for (const batchDocs of chunks) {
-            const batch = targetDb.batch();
-            batchDocs.forEach(sd => {
-                batch.set(targetDb.doc(sd.ref.path), sd.data());
-            });
-            await batch.commit();
-        }
+        // For each document in the subcollection, recurse
+        await runInParallel(subSnapshot.docs, async (subDoc) => {
+            await copyDocRecursive(subDoc, targetDb);
+        });
     });
 }
 

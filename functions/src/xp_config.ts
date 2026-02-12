@@ -95,9 +95,9 @@ export const defaultXPConfig: XPConfigData = {
     vengeanceXPReward: 25,
 
     // New Hardened & Loot values
-    xpLootPerDay: 2,
-    xpConsolidation15DayBonus: 5,
-    xpConsolidation25DayBonus: 8,
+    xpLootPerDay: 5,
+    xpConsolidation15DayBonus: 10,
+    xpConsolidation25DayBonus: 20,
     xpStreakInterruptionBonus: 15
 };
 
