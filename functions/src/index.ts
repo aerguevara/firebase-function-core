@@ -7,7 +7,7 @@ import { createOnReactionCreated } from "./reactions";
 import { BADGES } from "./badges";
 import { createOnMockWorkoutCreated } from "./debug_simulation";
 import { dailyUserSync } from "./sync";
-import { engagementHourlyJob, engagementRoutineJob } from "./engagement";
+import { createEngagementHourlyJob, createEngagementRoutineJob } from "./engagement";
 import { checkRankingChange } from "./ranking";
 
 // --- Invitations & User Management ---
@@ -136,15 +136,15 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
           title = "¡Logro desbloqueado! 🏆";
           if (data.badgeId && data.badgeId.startsWith("level_up_")) {
             const level = data.badgeId.split("_").pop();
-            body = `¡Felicidades! ¡Has alcanzado el Nivel ${level}!`;
+            body = `¡Felicidades! ¡Has alcanzado el Nivel ${level} !`;
           } else {
             const badge = BADGES.find((b) => b.id === data.badgeId);
             const badgeName = badge ? badge.name : (data.badgeId || "Recompensa");
-            body = `¡Has ganado la insignia ${badgeName}!`;
+            body = `¡Has ganado la insignia ${badgeName} !`;
           }
           break;
         case "territory_conquered":
-          title = data.locationLabel ? `¡Conquista en ${data.locationLabel}! 🚩` : "¡Territorio Conquistado! 🚩";
+          title = data.locationLabel ? `¡Conquista en ${data.locationLabel} ! 🚩` : "¡Territorio Conquistado! 🚩";
           body = data.locationLabel
             ? `Has conquistado nuevos territorios en ${data.locationLabel}. ¡Sigue así!`
             : "¡Has conquistado nuevos territorios! Sigue explorando.";
@@ -152,7 +152,7 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
         case "territory_stolen":
           title = "¡Territorio Robado! ⚔️";
           body = data.message || (data.locationLabel
-            ? `¡${data.senderName} te ha robado un territorio en ${data.locationLabel}! ¡Recupéralo!`
+            ? `¡${data.senderName} te ha robado un territorio en ${data.locationLabel} ! ¡Recupéralo!`
             : `¡${data.senderName} te ha robado un territorio! ¡Recupéralo!`);
           break;
         case "territory_defended":
@@ -162,17 +162,17 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
         case "territory_stolen_success":
           title = "¡Territorio Robado! 🏴‍☠️";
           body = data.message || (data.locationLabel
-            ? `¡Has robado territorios enemigos en ${data.locationLabel}!`
+            ? `¡Has robado territorios enemigos en ${data.locationLabel} !`
             : "¡Has robado territorios enemigos correctamente!");
           break;
         case "follower_territory_activity":
-          title = `¡Actividad de ${data.senderName}! 🚩`;
+          title = `¡Actividad de ${data.senderName} ! 🚩`;
           {
             const counts = [];
             if (data.conquestCount > 0) counts.push(`${data.conquestCount} conquistados`);
             if (data.stealCount > 0) counts.push(`${data.stealCount} robados`);
             const countText = counts.join(" y ");
-            const locationText = data.locationLabel ? ` en ${data.locationLabel}` : "";
+            const locationText = data.locationLabel ? ` en ${data.locationLabel} ` : "";
             body = `${data.senderName} ha obtenido ${countText}${locationText}.`;
           }
           break;
@@ -183,6 +183,18 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
         case "territory_guardian":
           title = "¡Alerta de Guardián! 🛡️";
           body = data.message || `Tu territorio en ${data.locationLabel || "el mapa"} está a punto de expirar.`;
+          break;
+        case "territory_expiring_soon":
+          title = "¡Tu territorio está por vencer! ⏳";
+          body = data.message || (data.locationLabel
+            ? `A tus territorios en ${data.locationLabel} les quedan 5 horas. ¡Entrena ahora para mantenerlos!`
+            : "A tus territorios les quedan 5 horas. ¡Entrena ahora para mantenerlos!");
+          break;
+        case "territories_expired":
+          title = "¡Territorios caducados! 📉";
+          body = data.message || (data.locationLabel
+            ? `¡Ups! Tus territorios en ${data.locationLabel} han caducado. ¡Vuelve a conquistarlos para recuperar tu racha!`
+            : "¡Ups! Tus territorios han caducado. ¡Vuelve a conquistarlos!");
           break;
         case "vengeance_reminder":
           title = "¡La venganza te espera! ⚔️";
@@ -266,7 +278,7 @@ export const onUserUpdatedPRE = createOnUserUpdated("adventure-streak-pre");
 export const onMockWorkoutCreatedPRE = createOnMockWorkoutCreated("adventure-streak-pre");
 
 export const scheduledDailySync = dailyUserSync;
-export const hourlyEngagement = engagementHourlyJob;
-export const routineEngagement = engagementRoutineJob;
-export const hourlyEngagementPRE = engagementHourlyJob;
-export const routineEngagementPRE = engagementRoutineJob;
+export const hourlyEngagement = createEngagementHourlyJob();
+export const routineEngagement = createEngagementRoutineJob();
+export const hourlyEngagementPRE = createEngagementHourlyJob("adventure-streak-pre");
+export const routineEngagementPRE = createEngagementRoutineJob("adventure-streak-pre");

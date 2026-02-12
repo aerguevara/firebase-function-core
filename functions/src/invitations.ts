@@ -58,59 +58,105 @@ export const createRedeemInvitation = (databaseId?: string) => onCall(async (req
     }
 
     const uid = request.auth.uid;
+
+    // 1. Try to find a private invitation first (Backward Compatibility)
     const inviteRef = db.collection("invitations").doc(token);
     const inviteDoc = await inviteRef.get();
 
-    if (!inviteDoc.exists || inviteDoc.data()?.status !== "pending") {
-        throw new HttpsError("not-found", "Invalid or already used invitation token.");
-    }
+    if (inviteDoc.exists && inviteDoc.data()?.status === "pending") {
+        const issuerUid = inviteDoc.data()?.issuer;
+        let newPath: string[] = [];
 
-    const issuerUid = inviteDoc.data()?.issuer;
-    let newPath: string[] = [];
+        if (issuerUid && issuerUid !== "SYSTEM-DEBUG") {
+            const issuerRef = db.collection("users").doc(issuerUid);
+            const issuerDoc = await issuerRef.get();
 
-    if (issuerUid && issuerUid !== "SYSTEM-DEBUG") {
-        const issuerRef = db.collection("users").doc(issuerUid);
-        const issuerDoc = await issuerRef.get();
+            if (!issuerDoc.exists) {
+                throw new HttpsError("internal", "Inviter no longer exists.");
+            }
 
-        if (!issuerDoc.exists) {
-            throw new HttpsError("internal", "Inviter no longer exists.");
+            const issuerData = issuerDoc.data();
+            const parentPath = issuerData?.invitationPath || [];
+            newPath = [...parentPath, issuerUid];
+        } else {
+            newPath = ["SYSTEM"];
         }
 
-        const issuerData = issuerDoc.data();
-        const parentPath = issuerData?.invitationPath || [];
-        newPath = [...parentPath, issuerUid];
-    } else {
-        // System debug or anonymous issuer
-        newPath = ["SYSTEM"];
-    }
+        const batch = db.batch();
 
-    const batch = db.batch();
-
-    // 1. Mark invite as used
-    batch.update(inviteRef, {
-        status: "used",
-        usedBy: uid,
-        usedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // 2. Update new user
-    // 2. Update new user (Use set with merge to avoiding race condition if doc doesn't exist yet)
-    batch.set(db.collection("users").doc(uid), {
-        invitationVerified: true,
-        invitedBy: issuerUid,
-        invitationPath: newPath,
-        invitationQuota: 3, // Default quota for new users
-    }, { merge: true });
-
-    // 3. Increment inviter count (if real user)
-    if (issuerUid && issuerUid !== "SYSTEM-DEBUG") {
-        const issuerRef = db.collection("users").doc(issuerUid);
-        batch.update(issuerRef, {
-            invitationCount: admin.firestore.FieldValue.increment(1),
+        // Mark invite as used
+        batch.update(inviteRef, {
+            status: "used",
+            usedBy: uid,
+            usedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        // Update new user
+        batch.set(db.collection("users").doc(uid), {
+            invitationVerified: true,
+            invitedBy: issuerUid,
+            invitationPath: newPath,
+            invitationQuota: 3,
+        }, { merge: true });
+
+        // Increment inviter count
+        if (issuerUid && issuerUid !== "SYSTEM-DEBUG") {
+            const issuerRef = db.collection("users").doc(issuerUid);
+            batch.update(issuerRef, {
+                invitationCount: admin.firestore.FieldValue.increment(1),
+            });
+        }
+
+        await batch.commit();
+        return { success: true, mode: "private" };
     }
 
-    await batch.commit();
+    // 2. Fallback: Try to find a global invitation
+    const globalRef = db.collection("global_invitations").doc(token);
+    const globalDoc = await globalRef.get();
 
-    return { success: true };
+    if (globalDoc.exists) {
+        const globalData = globalDoc.data();
+        const now = admin.firestore.Timestamp.now();
+
+        if (!globalData?.active) {
+            throw new HttpsError("failed-precondition", "This global code is no longer active.");
+        }
+
+        if (now < globalData.startsAt || now > globalData.endsAt) {
+            throw new HttpsError("out-of-range", "This invitation code has expired or is not yet active.");
+        }
+
+        // Check if user already redeemed this specific global code
+        const redemptionRef = globalRef.collection("redemptions").doc(uid);
+        const redemptionDoc = await redemptionRef.get();
+        if (redemptionDoc.exists) {
+            throw new HttpsError("already-exists", "You have already redeemed this code.");
+        }
+
+        const batch = db.batch();
+
+        // Record redemption for this user
+        batch.set(redemptionRef, {
+            redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Update global usage count
+        batch.update(globalRef, {
+            usageCount: admin.firestore.FieldValue.increment(1),
+        });
+
+        // Update user (Verified via Global Code)
+        batch.set(db.collection("users").doc(uid), {
+            invitationVerified: true,
+            invitedBy: "SYSTEM-GLOBAL",
+            invitationPath: ["GLOBAL"],
+            invitationQuota: 3,
+        }, { merge: true });
+
+        await batch.commit();
+        return { success: true, mode: "global" };
+    }
+
+    throw new HttpsError("not-found", "Invalid, expired, or already used invitation token.");
 });
