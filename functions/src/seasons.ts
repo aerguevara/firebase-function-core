@@ -30,8 +30,8 @@ export const SEASONS_2026: SeasonConfig[] = [
     },
     {
         id: "T2_2026",
-        name: "Racha de Primavera",
-        startDate: new Date("2026-04-01T00:00:00Z"),
+        name: "Temporada 2: El Despertar",
+        startDate: new Date("2026-04-03T00:00:00Z"),
         endDate: new Date("2026-06-30T23:59:59Z"),
         missionId: "iron_chain",
         missionName: "Cadena de Hierro",

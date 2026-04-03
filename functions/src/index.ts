@@ -9,6 +9,14 @@ import { createOnMockWorkoutCreated } from "./debug_simulation";
 import { dailyUserSync } from "./sync";
 import { createEngagementHourlyJob, createEngagementRoutineJob } from "./engagement";
 import { checkRankingChange } from "./ranking";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { FraudAnalyzer, resolveFraud } from "./fraud";
+import { FraudLogEntry, sendDailyFraudSummary } from "./telegram_utils";
+
+// --- Admin Tasks ---
+import { createOnAdminTaskCreated } from "./admin";
+export const onAdminTaskCreated = createOnAdminTaskCreated();
+export const onAdminTaskCreatedPRE = createOnAdminTaskCreated("adventure-streak-pre");
 
 // --- Invitations & User Management ---
 import { createGenerateInvitation, createRedeemInvitation } from "./invitations";
@@ -212,6 +220,10 @@ export const createOnNotificationCreated = (databaseId: string | undefined = und
           title = "Entrenamiento Procesado 🏃";
           body = "Tu entrenamiento ha sido analizado y los territorios actualizados.";
           break;
+        case "fraud_detected":
+          title = "🚨 Actividad Anulada";
+          body = `Tu actividad del ${data.activityDate} ha sido identificada como fraude. Hemos revocado los puntos (XP) y territorios obtenidos. ¡Juega limpio!`;
+          break;
       }
 
       // Limit multicast to 500 tokens at a time (FCM limit)
@@ -264,11 +276,115 @@ export const createOnUserUpdated = (databaseId: string | undefined = undefined) 
     await checkRankingChange(db, event.params.userId, afterData);
   });
 
+/**
+ * Real-time Fraud Detection Trigger
+ * Monitors activities when they reach 'completed' status and reverts gains if fraud is detected.
+ */
+export const createOnActivityCreatedFraud = (databaseId: string | undefined = undefined) =>
+  onDocumentUpdated({
+    document: "activities/{activityId}",
+    database: databaseId
+  }, async (event) => {
+    const change = event.data;
+    if (!change) return;
+
+    const beforeData = change.before.data();
+    const afterData = change.after.data();
+
+    if (!afterData) return;
+
+    // 1. Only trigger when status changes to 'completed'
+    const beforeStatus = beforeData?.processingStatus;
+    const afterStatus = afterData?.processingStatus;
+
+    if (afterStatus !== "completed" || beforeStatus === "completed") {
+      return;
+    }
+
+    console.log(`[FraudGuard] Activity ${event.params.activityId} completed. Analyzing for fraud...`);
+
+    const db = databaseId ? getFirestore(databaseId) : getFirestore();
+    const analyzer = new FraudAnalyzer();
+
+    // 2. Stream route points from subcollection (Robust to large datasets)
+    const routeStream = db.collection("activities").doc(event.params.activityId)
+      .collection("routes").orderBy("order", "asc").stream();
+
+    return new Promise((resolve, reject) => {
+      routeStream.on("data", (doc: any) => {
+        const chunk = doc.data();
+        if (chunk.points && Array.isArray(chunk.points)) {
+          // If fraud is detected in this chunk, stop streaming and resolve immediately
+          if (analyzer.processChunk(chunk.points)) {
+            console.log(`[FraudGuard] Early Fraud Exit for ${event.params.activityId}`);
+            // We can't easily "break" a Node stream, but we can stop processing
+            // and trigger resolution.
+            (routeStream as any).destroy(); 
+          }
+        }
+      });
+
+      routeStream.on("end", async () => {
+        const detection = analyzer.getDetection();
+        if (detection && detection.severity === "fraud") {
+          console.log(`[FraudGuard] Resolving fraud for ${event.params.activityId}. Reason: ${detection.reason}`);
+          const enrichedData = { ...afterData, fraudSeverity: detection.severity, fraudReason: detection.reason };
+          await resolveFraud(event.params.activityId, enrichedData, databaseId);
+        }
+        resolve(null);
+      });
+
+      routeStream.on("error", (err) => {
+        console.error(`[FraudGuard] Stream error for activity ${event.params.activityId}:`, err);
+        reject(err);
+      });
+    });
+  });
+
+/**
+ * Daily Admin Fraud Report
+ * Groups all detections from the last 24h and sends a report to Telegram at 18:00h.
+ */
+export const createDailyFraudReport = (databaseId: string | undefined = undefined) =>
+  onSchedule({
+    schedule: "0 18 * * *",
+    timeZone: "Europe/Madrid",
+    secrets: [
+      "TELEGRAM_BOT_TOKEN_PRO", "TELEGRAM_CHAT_ID_PRO",
+      "TELEGRAM_BOT_TOKEN_PRE", "TELEGRAM_CHAT_ID_PRE"
+    ]
+  }, async (event) => {
+    console.log(`[FraudGuard] Generating daily admin report for ${databaseId || "default"}...`);
+    
+    const db = databaseId ? getFirestore(databaseId) : getFirestore();
+    const yesterday = new Date();
+    yesterday.setHours(yesterday.getHours() - 24);
+
+    const logsSnapshot = await db.collection("fraud_logs_admin")
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(yesterday))
+      .get();
+
+    const logs: FraudLogEntry[] = logsSnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        userId: data.userId,
+        activityId: data.activityId,
+        reason: data.reason,
+        severity: data.severity,
+        timestamp: data.timestamp?.toDate()?.toISOString() || ""
+      };
+    });
+
+    await sendDailyFraudSummary(databaseId, logs);
+  });
+
 // --- PROD ENV (Default Database) ---
 export const onNotificationCreated = createOnNotificationCreated();
 export const processActivityComplete = createProcessActivityComplete();
 export const onReactionCreated = createOnReactionCreated();
 export const onUserUpdated = createOnUserUpdated();
+export const onActivityCreatedFraud = createOnActivityCreatedFraud();
+export const dailyFraudReport = createDailyFraudReport();
 
 // --- PRE ENV (adventure-streak-pre Database) ---
 export const onNotificationCreatedPRE = createOnNotificationCreated("adventure-streak-pre");
@@ -276,9 +392,12 @@ export const processActivityCompletePRE = createProcessActivityComplete("adventu
 export const onReactionCreatedPRE = createOnReactionCreated("adventure-streak-pre");
 export const onUserUpdatedPRE = createOnUserUpdated("adventure-streak-pre");
 export const onMockWorkoutCreatedPRE = createOnMockWorkoutCreated("adventure-streak-pre");
+export const onActivityCreatedFraudPRE = createOnActivityCreatedFraud("adventure-streak-pre");
+export const dailyFraudReportPRE = createDailyFraudReport("adventure-streak-pre");
 
 export const scheduledDailySync = dailyUserSync;
 export const hourlyEngagement = createEngagementHourlyJob();
 export const routineEngagement = createEngagementRoutineJob();
 export const hourlyEngagementPRE = createEngagementHourlyJob("adventure-streak-pre");
 export const routineEngagementPRE = createEngagementRoutineJob("adventure-streak-pre");
+

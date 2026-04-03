@@ -121,5 +121,13 @@ service cloud.firestore {
     match /invitations/{inviteId} {
       allow read, write: if false;
     }
+
+    // 10. Admin Tasks (Execution triggers)
+    // - Read/Create: Only for administrators.
+    match /admin_tasks/{taskId} {
+      allow read, create: if isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true;
+      allow update, delete: if false;
+    }
   }
 }
