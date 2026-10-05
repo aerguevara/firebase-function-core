@@ -93,6 +93,7 @@ export const createRedeemInvitation = (databaseId?: string) => onCall(async (req
 
         // Update new user
         batch.set(db.collection("users").doc(uid), {
+            joinedAt: admin.firestore.FieldValue.serverTimestamp(),
             invitationVerified: true,
             invitedBy: issuerUid,
             invitationPath: newPath,
@@ -148,6 +149,7 @@ export const createRedeemInvitation = (databaseId?: string) => onCall(async (req
 
         // Update user (Verified via Global Code)
         batch.set(db.collection("users").doc(uid), {
+            joinedAt: admin.firestore.FieldValue.serverTimestamp(),
             invitationVerified: true,
             invitedBy: "SYSTEM-GLOBAL",
             invitationPath: ["GLOBAL"],

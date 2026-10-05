@@ -27,6 +27,11 @@ export async function checkRankingChange(
     const newXP = userData.xp || 0;
     const newDisplayName = userData.displayName || "Explorador";
 
+    // A user must have earned XP in the active season to claim the leaderboard throne
+    if (newXP <= 0) {
+        return;
+    }
+
     const rankingConfigRef = db.collection("config").doc("ranking");
 
     try {
@@ -54,10 +59,11 @@ export async function checkRankingChange(
             }
 
             // Check if new user surpasses current leader
-            // Note: If no leader exists (first time), new user takes it.
+            // Primary metric: Seasonal XP (higher is better)
+            // Secondary metric: Level (higher is better in case of XP tie)
             const isBetter = !currentLeader ||
-                (newLevel > currentLeader.level) ||
-                (newLevel === currentLeader.level && newXP > currentLeader.xp);
+                (newXP > (currentLeader.xp || 0)) ||
+                (newXP === (currentLeader.xp || 0) && newLevel > (currentLeader.level || 0));
 
             if (isBetter) {
                 console.log(`[Ranking] New Leader detected: ${newDisplayName} (${userId})`);

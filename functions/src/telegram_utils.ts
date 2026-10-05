@@ -50,15 +50,16 @@ export async function sendDailyFraudSummary(databaseId: string | undefined, logs
  * Supports multiple recipients if chat ID is a comma-separated list.
  */
 export async function sendTelegramMessage(text: string, envPrefix: "PRE" | "PRO" = "PRO"): Promise<boolean> {
-  const token = process.env[`TELEGRAM_BOT_TOKEN_${envPrefix}`];
+  const tokenRaw = process.env[`TELEGRAM_BOT_TOKEN_${envPrefix}`];
   const chatIdsRaw = process.env[`TELEGRAM_CHAT_ID_${envPrefix}`];
 
-  if (!token || !chatIdsRaw) {
+  if (!tokenRaw || !chatIdsRaw) {
     console.error(`[Telegram] Telegram credentials missing for ${envPrefix}. 
       Ensure TELEGRAM_BOT_TOKEN_${envPrefix} and TELEGRAM_CHAT_ID_${envPrefix} are set.`);
     return false;
   }
 
+  const token = tokenRaw.trim();
   const chatIds = chatIdsRaw.split(",").map(id => id.trim()).filter(id => id.length > 0);
   const apiUrl = `https://api.telegram.org/bot${token}/sendMessage`;
 

@@ -28,7 +28,8 @@ service cloud.firestore {
       // Social connections
       match /followers/{followerId} {
         allow read: if isAuthenticated();
-        allow write: if isOwner(userId);
+        // Allow the profile owner OR the follower themselves to write
+        allow write: if isOwner(userId) || (isAuthenticated() && request.auth.uid == followerId);
       }
       
       match /following/{followingId} {

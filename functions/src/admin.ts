@@ -160,7 +160,7 @@ async function phase3UserReset(db: Firestore, seasonId: string, seasonName: stri
       completedAt: FieldValue.serverTimestamp()
     };
 
-    await doc.ref.update({
+    const updateData: { [key: string]: any } = {
       prestige: FieldValue.increment(prestigeEarned),
       xp: 0,
       totalActivities: 0,
@@ -180,7 +180,14 @@ async function phase3UserReset(db: Firestore, seasonId: string, seasonName: stri
       recentTheftVictims: [],
       lastSeasonReset: FieldValue.serverTimestamp(),
       [`seasonHistory.${seasonId}`]: historyEntry
-    });
+    };
+
+    // ENSURE joinedAt is present if missing
+    if (!data.joinedAt) {
+      updateData["joinedAt"] = FieldValue.serverTimestamp();
+    }
+
+    await doc.ref.update(updateData as any);
 
     await fastDeleteSubcollection(doc.ref, "vengeance_targets");
   });
